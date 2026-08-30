@@ -53,6 +53,14 @@ func NewRegistry() *Registry {
 	}
 }
 
+// Clear removes all registered tools from the registry.
+// Used when transitioning between phases to avoid tool name collisions.
+func (r *Registry) Clear() {
+	r.tools = inmemory.NewBtree[int, ToolDefinition](true)
+	r.orderByKey = make(map[string]int)
+	r.nextOrder = 0
+}
+
 func (r *Registry) upsertTool(name string, def ToolDefinition) {
 	if existingOrder, ok := r.orderByKey[name]; ok {
 		r.tools.Upsert(existingOrder, def)

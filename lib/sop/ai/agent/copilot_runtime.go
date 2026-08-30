@@ -2467,8 +2467,19 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 		return "", fmt.Errorf("agent not initialized")
 	}
 
+	log.Info("[EXECUTE] Tool call received",
+		"tool_name", toolName,
+		"args_keys", func() []string {
+			keys := make([]string, 0, len(args))
+			for k := range args {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+
 	// Legacy path: register tools if registry is empty (tests, direct Execute calls)
 	if len(a.registry.List()) == 0 {
+		log.Warn("[EXECUTE] Registry empty, using legacy registerTools()")
 		a.registerTools(ctx)
 	}
 
@@ -2492,15 +2503,29 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 
 	tool, ok := a.registry.Get(toolName)
 	if !ok || tool.Handler == nil {
+		log.Error("[EXECUTE] Tool not found in registry",
+			"tool_name", toolName,
+			"registered_count", len(a.registry.List()))
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
 
+	log.Info("[EXECUTE] Tool found, executing handler", "tool_name", toolName)
+
 	res, err := tool.Handler(ctx, args)
 	if err != nil {
+		log.Error("[EXECUTE] Tool execution failed",
+			"tool_name", toolName,
+			"error", err)
 		return "", err
 	}
+	log.Info("[EXECUTE] Tool execution succeeded",
+		"tool_name", toolName,
+		"result_type", fmt.Sprintf("%T", res))
 	formatted, err := formatToolResult(ctx, res)
 	if err != nil {
+		log.Error("[EXECUTE] Tool result formatting failed",
+			"tool_name", toolName,
+			"error", err)
 		return "", err
 	}
 	return wrapToolResultWithStorage(ctx, toolName, formatted)

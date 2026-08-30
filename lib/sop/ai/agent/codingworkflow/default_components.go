@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -1125,7 +1126,7 @@ func (d *DefaultTestRunner) Run(ctx context.Context, task Task, state RunState) 
 	// Dispatch to language-specific test runner
 	switch projectType {
 	case ProjectTypeGo:
-		return d.runGoTests(ctx, workingDir, task.ActiveFile, state)
+		return d.runGoTests(ctx, task, workingDir, state)
 	case ProjectTypePython:
 		return d.runPythonTests(ctx, workingDir, task.ActiveFile, state)
 	case ProjectTypeJava:
@@ -1194,20 +1195,75 @@ func (d *DefaultTestRunner) detectProjectType(workingDir string) ProjectType {
 	return ProjectTypeUnknown
 }
 
-// runGoTests executes Go tests
-func (d *DefaultTestRunner) runGoTests(ctx context.Context, workingDir, activeFile string, state RunState) (TestResult, error) {
+// runGoTests executes Go tests with query-aware focusing
+func (d *DefaultTestRunner) runGoTests(ctx context.Context, task Task, workingDir string, state RunState) (TestResult, error) {
 	args := []string{"test"}
-	selectedTests := d.selectRelevantGoTestFiles(workingDir, activeFile)
-	if len(selectedTests) > 0 {
-		args = append(args, "./...", "-run", "Test")
+
+	// Parse query for test name patterns and package paths
+	testPattern := extractGoTestPattern(task.Description)
+	packagePath := extractGoPackagePath(task.Description)
+
+	if testPattern != "" {
+		// Focused test run: go test -run TestName ./package
+		if packagePath != "" {
+			args = append(args, "-run", testPattern, "./"+packagePath)
+			log.Printf("[runGoTests] Focused test: -run %s ./%s", testPattern, packagePath)
+		} else {
+			args = append(args, "-run", testPattern, "./...")
+			log.Printf("[runGoTests] Focused test: -run %s ./...", testPattern)
+		}
+	} else if packagePath != "" {
+		// Package-scoped: go test ./package
+		args = append(args, "./"+packagePath)
+		log.Printf("[runGoTests] Package-scoped: ./%s", packagePath)
 	} else {
+		// Broad pass: go test ./...
 		args = append(args, "./...")
+		log.Printf("[runGoTests] Broad pass: ./...")
 	}
 
 	// Route through LocalCommandExecutor to use PTY for stdout/stderr capture
 	cmdStr := "go " + strings.Join(args, " ")
 	output, passed := d.executeCommandThroughPTY(ctx, cmdStr, workingDir, state)
 	return TestResult{Passed: passed, Output: output}, nil
+}
+
+// extractGoTestPattern extracts test name from query like "TestAuthenticateUser_ValidCredentials"
+func extractGoTestPattern(query string) string {
+	// Match Go test names (TestXxx, Test_xxx)
+	re := regexp.MustCompile(`\b(Test[A-Z_][A-Za-z0-9_]*)\b`)
+	if matches := re.FindStringSubmatch(query); len(matches) > 1 {
+		log.Printf("[extractGoTestPattern] Found test pattern: %s", matches[1])
+		return matches[1]
+	}
+	log.Printf("[extractGoTestPattern] No test pattern found in query: %s", query)
+	return ""
+}
+
+// extractGoPackagePath extracts package path from query with explicit markers
+// Only matches when package path is explicitly indicated, not from prose like "failing packages/tests"
+func extractGoPackagePath(query string) string {
+	// Match explicit package indicators:
+	// - "in package X", "test package X", "package X"
+	// - "go test X" or "go test ./X"
+	// - Paths starting with ./ or containing multiple segments clearly indicating a path
+	patterns := []string{
+		`(?:in|test|package)\s+([a-z][a-z0-9/_-]+(?:/[a-z][a-z0-9_-]+)+)`, // "in package tools/sopbackend"
+		`go\s+test\s+(?:\./)?([a-z][a-z0-9/_-]+(?:/[a-z][a-z0-9_-]+)+)`,   // "go test tools/sopbackend"
+		`\./([a-z][a-z0-9/_-]+(?:/[a-z][a-z0-9_-]+)+)`,                    // "./tools/sopbackend"
+		`\b([a-z]+/[a-z]+/[a-z0-9_-]+)\b`,                                 // "cmd/daemon/main" (3+ segments)
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(query); len(matches) > 1 {
+			pkg := strings.TrimPrefix(matches[1], "./")
+			log.Printf("[extractGoPackagePath] Found package path: %s (pattern: %s)", pkg, pattern)
+			return pkg
+		}
+	}
+	log.Printf("[extractGoPackagePath] No explicit package path found in query: %s", query)
+	return ""
 }
 
 // runPythonTests executes Python tests (pytest or unittest)

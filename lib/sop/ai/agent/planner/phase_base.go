@@ -57,8 +57,8 @@ func newBasePhase(phaseID, name, description, domain string, infra *SharedInfras
 		name:                   name,
 		description:            description,
 		domain:                 domain,
-		captureTool:            phaseID + "_capture",
-		stateTool:              phaseID + "_state",
+		captureTool:            "capture", // Clean name - phase routing handled internally
+		stateTool:              "state",   // Clean name - phase routing handled internally
 		classificationStrategy: strategy,
 	}
 }
@@ -309,7 +309,9 @@ func (b *BasePhase) BuildGuidanceProfile(query string, state capabilities.Routin
 // Common helper methods
 
 func (b *BasePhase) phaseToolName(suffix string) string {
-	return b.phaseID + "_" + suffix
+	// Phases are internal orchestration - LLM should not see phase prefixes
+	// Return clean tool name; phase routing handled by registry internally
+	return suffix
 }
 
 func (b *BasePhase) ensureSharedInfrastructure() *SharedInfrastructure {

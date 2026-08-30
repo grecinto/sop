@@ -1,6 +1,6 @@
 # SOP Documentation Index
 
-Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
+Comprehensive guide to SOP platform documentation. Last updated: 2026-08-29.
 
 ---
 
@@ -123,9 +123,12 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
 | [PHASE_PLAN_GUIDE.md](PHASE_PLAN_GUIDE.md) | Phase Plan System usage guide - Cognitive pattern for multi-step problem-solving |
 | [DOMAIN_AGNOSTIC_PHASE_SYSTEM.md](DOMAIN_AGNOSTIC_PHASE_SYSTEM.md) | 🚧 **Design Phase**: Domain-agnostic phase evolution - Making phases work across ALL domains (Stores, Spaces, Desktop, Coding) to improve success rate via methodical workflows |
 | [DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md](DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md) | 📋 **Quick Resume Guide**: TL;DR for resuming domain-agnostic phase system implementation - 90min implementation plan with code locations |
+| [PHASE_SYSTEM_STATUS_AUG_2026.md](PHASE_SYSTEM_STATUS_AUG_2026.md) | ✅ **Production Status**: Coding workflow phase system validated - Autonomous test fixing working, ready for multi-domain extension |
+| [AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md](AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md) | 🐛 **Debug Log**: Complete bug history and solutions for autonomous test fixing - Query parsing, path resolution, phase succession fixes |
+| [PHASE_DEBUGGING_QUICK_REF.md](PHASE_DEBUGGING_QUICK_REF.md) | 🔍 **Quick Reference**: Error patterns, grep commands, validation checklist for phase system debugging |
 | [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md) | 🚀 **Premium Feature**: Semantic workflow undo with multi-dimensional indexing, time-ranked search, and Space-backed storage. Industry-leading transaction management for AI-assisted coding. |
 | [../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md](../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md) | ⚠️ **Critical**: Semantic Path Search requires complete category hierarchies. Documents EnsureCategory fix for workflow category storage. |
-| [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow implementation |
+| [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | ✅ **Production**: Terminal-first coding workflow with autonomous test fixing - Phase-based orchestration validated |
 
 ### Platform
 

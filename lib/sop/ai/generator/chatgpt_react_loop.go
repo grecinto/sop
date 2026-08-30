@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	log "log/slog"
 	"strconv"
 	"strings"
 
@@ -369,9 +370,10 @@ func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAI
 		profile = req.ModelProfile
 	}
 
-	// OPTIMIZATION: With native continuation support, tools persist server-side after first turn
-	// Skip tools on continuation requests (server remembers from initial request via previous_response_id)
-	var toolsToSend []openAIResponsesTool = nil
+	// GPT Responses API requires tools on every continuation turn (unlike Anthropic)
+	// Send the original tools from the first request to maintain tool availability
+	toolsToSend := prev.Tools
+	log.Info("[buildContinuationRequest] Building continuation", "prev_tools_count", len(prev.Tools), "toolsToSend_count", len(toolsToSend), "response_id", response.ID)
 
 	request := openAIResponsesRequest{
 		Model:              model,

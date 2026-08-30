@@ -1,8 +1,26 @@
 # Domain-Agnostic Phase System - Quick Resume Guide
 
 **Created**: 2026-07-30  
+**Last Updated**: 2026-08-29  
 **Status**: Design Complete - Ready for Implementation  
+**Coding Workflow**: ✅ Production (All critical bugs fixed - see Debug Log below)  
 **Full Design**: See [DOMAIN_AGNOSTIC_PHASE_SYSTEM.md](./DOMAIN_AGNOSTIC_PHASE_SYSTEM.md)
+
+---
+
+## 🎉 Coding Workflow Production Status (Aug 2026)
+
+The **coding_workflow domain** with phase-based orchestration is now **production-ready** after resolving all critical bugs in autonomous test fixing:
+
+✅ **Query Parsing**: No false positives from natural language text  
+✅ **Path Resolution**: No path doubling (`lib/sop/lib/sop`)  
+✅ **Phase Succession**: Transaction evaluator sees correct phase  
+✅ **Tool Registration**: Clean names without phase prefixes  
+✅ **Autonomous Flow**: Investigation → Execution works without intervention
+
+**For debugging details and lessons learned**, see: [AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md](./AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md)
+
+**Next Step**: Extend this working pattern to Stores, Spaces, and Desktop domains using the implementation steps below.
 
 ---
 

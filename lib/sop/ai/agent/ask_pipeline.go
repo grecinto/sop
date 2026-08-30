@@ -417,6 +417,15 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		plan, currentPhase := a.resolvePhasePlan(ctx, askCtx)
 		log.Info("Phase plan resolved", "plan", plan, "current_phase", currentPhase)
 
+		// CRITICAL: Update classification with actual resolved phase
+		// Transaction evaluator uses classification.Phase, so it must match reality
+		if currentPhase != "" && currentPhase != askCtx.Phase {
+			log.Info("Updating classification phase for transaction evaluator",
+				"old_phase", askCtx.Phase,
+				"resolved_phase", currentPhase)
+			askCtx.Phase = currentPhase
+		}
+
 		// Track phase execution for iteration counting (prevents infinite loops)
 		if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 			if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil {
@@ -451,6 +460,10 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		// Aggregate tools from all phases with CRUD filtering
 		tools := a.aggregatePhaseTools(phases, askCtx)
 		log.Info("Phase tools aggregated with CRUD filtering", "tool_count", len(tools), "crud", askCtx.CRUD)
+
+		// Clear registry before registering phase tools to avoid collisions between phase transitions
+		a.registry.Clear()
+		log.Info("[REGISTER] Registry cleared before phase tool registration")
 
 		// Register phase tools with ReAct
 		a.registerPhaseTools(ctx, tools, phases, askCtx)
@@ -719,7 +732,8 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 				rawPlannedPhases := existingPlan.GetPlannedPhases()
 				plannedPhases := canonicalizeCodingRuntimePlan(classification, rawPlannedPhases)
 				currentIndex := existingPlan.GetCurrentIndex()
-				if actorPhase := queuedPhaseActor(ctx); actorPhase != "" {
+				actorPhase := queuedPhaseActor(ctx)
+				if actorPhase != "" {
 					for idx, plannedPhase := range rawPlannedPhases {
 						if normalizePhase(plannedPhase) == actorPhase {
 							if currentIndex != idx {
@@ -732,8 +746,13 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 				}
 
 				if currentIndex < len(rawPlannedPhases) {
-					currentPhase = resolveActiveCodingRuntimePhase(classification, rawPlannedPhases[currentIndex])
-					if queuedPhaseActor(ctx) == "" && currentPhase == "planning" && shouldPromotePersistedCodingPlanningToExecution(classification) {
+					// When phase explicitly enqueued via actor, use it directly instead of ExecutionReady gating
+					if actorPhase != "" {
+						currentPhase = actorPhase
+					} else {
+						currentPhase = resolveActiveCodingRuntimePhase(classification, rawPlannedPhases[currentIndex])
+					}
+					if actorPhase == "" && currentPhase == "planning" && shouldPromotePersistedCodingPlanningToExecution(classification) {
 						for idx, plannedPhase := range rawPlannedPhases {
 							if normalizePhase(plannedPhase) == "execution" {
 								existingPlan.SetCurrentIndex(idx)
@@ -995,6 +1014,26 @@ func askClassificationHasDomain(domains []string, want string) bool {
 //
 //	domains=["stores", "spaces"], phase="investigation"
 //	→ StoresPhase("investigation") + SpacesPhase("investigation")
+//
+// CLASSIFICATION-DRIVEN ARCHITECTURE:
+// This method is called AFTER classification completes in evaluateAskRoutingGates().
+// Classification determines:
+//   - Domains (e.g., ["coding_workflow"]) → which domain implementations to use
+//   - Phase (e.g., "investigation") → which phase to activate
+//   - CRUD (e.g., ["R"]) → which tools to expose via filtering
+//
+// Tool registration flow:
+//  1. Classification returns domains + phase + CRUD
+//  2. createPhaseProxies() creates capability for each domain + current phase
+//  3. aggregatePhaseTools() collects tools and applies CRUD filtering
+//  4. registerPhaseTools() registers filtered tools with ReAct engine
+//
+// Example: Classification returns domain="coding_workflow", phase="investigation", CRUD=["R"]
+//
+//	→ Creates CodingPhase with phaseID="investigation"
+//	→ Exposes 9 investigation_* tools (all universal tools)
+//	→ CRUD filter keeps only Read-compatible tools
+//	→ Registers investigation_run_tests, investigation_read_file, etc.
 func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string, classification *AskTaskContext) []capabilities.Capability {
 	phases := []capabilities.Capability{}
 
@@ -1032,15 +1071,13 @@ func resolveDomainToolPhases(domain, currentPhase string, classification *AskTas
 	if currentPhase == "" {
 		currentPhase = "investigation"
 	}
-	if domain == "coding_workflow" && classification != nil && strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) == orchestrationManagedWorkflow {
-		switch currentPhase {
-		case "planning":
-			return []string{"investigation", "planning", "execution"}
-		case "investigation":
-			// Expose investigation, planning, AND execution so LLM can run tests during investigation
-			return []string{"investigation", "planning", "execution"}
-		}
-	}
+
+	// CLASSIFICATION-DRIVEN TOOL REGISTRATION:
+	// - Each phase exposes universal tools (run_tests, read_file, search_repo, etc.)
+	// - Only register tools for the CURRENT phase
+	// - Avoids duplicate tools (investigation_run_tests vs execution_run_tests)
+	// - Phase-specific tools (apply_patch, create_succession_path) are available when in that phase
+
 	return []string{currentPhase}
 }
 
@@ -1075,12 +1112,27 @@ func useCodingImplementationBundle(classification *AskTaskContext, currentPhase 
 	return false
 }
 
-// aggregatePhaseTools collects tools from ALL phase proxies.
+// aggregatePhaseTools collects tools from ALL phase proxies and applies CRUD filtering.
 //
-// USER SPECIFICATION:
-// - Collect ALL tools from all phases
-// - Phase 3 optimization: Apply CRUD filtering based on classification
-// - LLM will decide which tools to call from the filtered set
+// CLASSIFICATION-DRIVEN FILTERING:
+// - Collects ALL tools from phase.ExposeTools() for each phase
+// - Applies CRUD filtering based on classification.CRUD flags
+// - Filters out runtime tools (assess_and_route, create_succession_path) for coding domain
+// - LLM decides which tools to call from the filtered set
+//
+// CRUD Filtering Examples:
+//   - CRUD=["R"] → Only Read tools (run_tests, read_file, search_repo, build_context, inspect_repo, list_changed_files, index_repo_structure)
+//   - CRUD=["C","U"] → Create+Update tools (apply_patch, write_file, plan_changes, etc.)
+//   - CRUD=["R","U"] → Read+Update tools (combined set)
+//
+// Tool Tags (from capabilities.ToolDefinition):
+//   - Tags: ["R"] → Read-only tool
+//   - Tags: ["C"] → Create tool
+//   - Tags: ["U"] → Update tool
+//   - Tags: ["D"] → Delete tool
+//   - No tags → Available for all CRUD operations
+//
+// This ensures LLM only sees tools relevant to the classified operation type.
 func (a *CopilotAgent) aggregatePhaseTools(phases []capabilities.Capability, classification *AskTaskContext) []capabilities.ToolDefinition {
 	allTools := []capabilities.ToolDefinition{}
 
@@ -1159,10 +1211,21 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 	}
 
 	// Register each tool
-	for _, toolDef := range allTools {
+	log.Info("[REGISTER] Registering phase tools", "tool_count", len(allTools))
+	for i, toolDef := range allTools {
 		toolName := toolDef.Name
 		toolDescription := toolDef.Description
 		toolSchema := toolDef.Schema
+
+		log.Info("[REGISTER] Registering tool",
+			"index", i+1,
+			"tool_name", toolName,
+			"description", func() string {
+				if len(toolDescription) > 80 {
+					return toolDescription[:80] + "..."
+				}
+				return toolDescription
+			}())
 
 		// Determine which phase owns this tool (by tool name prefix)
 		owningPhase := a.findOwningPhase(toolName, phases)
@@ -1171,12 +1234,21 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 		// ✅ PARTICIPANT PATTERN: Handler calls phase.ExecuteTool(), phase returns result
 		// ❌ NEVER: Phase controls flow or enqueues multiple work items
 		handler := func(ctx context.Context, args map[string]any) (string, error) {
-			log.Info("[TOOL HANDLER] Called", "tool", toolName, "args", args, "phase", func() string {
-				if owningPhase != nil {
-					return owningPhase.ID()
-				}
-				return "unknown"
-			}())
+			log.Info("[TOOL HANDLER] Tool invoked through registry",
+				"tool", toolName,
+				"phase", func() string {
+					if owningPhase != nil {
+						return owningPhase.ID()
+					}
+					return "unknown"
+				}(),
+				"args_keys", func() []string {
+					keys := make([]string, 0, len(args))
+					for k := range args {
+						keys = append(keys, k)
+					}
+					return keys
+				}())
 
 			if owningPhase == nil {
 				return "", fmt.Errorf("no owning phase found for tool: %s", toolName)
@@ -1213,7 +1285,8 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 }
 
 // findOwningPhase determines which phase capability owns a given tool.
-// Tool names are prefixed with phase name (e.g., "investigation_list_stores")
+// Since multiple phases may expose the same tool name (e.g., "run_tests"),
+// we rely on the current phase context - only tools from active phases are registered.
 func (a *CopilotAgent) findOwningPhase(toolName string, phases []capabilities.Capability) capabilities.Capability {
 	for _, phase := range phases {
 		// Check if tool appears in this phase's exposed tools

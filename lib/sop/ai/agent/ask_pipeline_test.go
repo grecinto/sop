@@ -381,11 +381,12 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.
 	if !toolNames["investigation_search_repo"] {
 		t.Fatalf("expected investigation phase to expose investigation tools, got %v", toolNames)
 	}
-	if !toolNames["planning_plan_changes"] {
-		t.Fatalf("expected managed investigation phase to expose planning tools, got %v", toolNames)
+	if !toolNames["investigation_run_tests"] {
+		t.Fatalf("expected investigation phase to expose investigation_run_tests, got %v", toolNames)
 	}
-	if !toolNames["planning_build_context"] {
-		t.Fatalf("expected managed investigation phase to expose planning_build_context, got %v", toolNames)
+	// After simplification: Only current phase tools are exposed (no look-ahead to planning/execution)
+	if toolNames["planning_plan_changes"] {
+		t.Fatalf("did not expect investigation phase to expose planning tools, got %v", toolNames)
 	}
 	if toolNames["execution_apply_patch"] {
 		t.Fatalf("did not expect investigation phase to expose execution_apply_patch, got %v", toolNames)

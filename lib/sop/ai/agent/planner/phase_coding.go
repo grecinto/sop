@@ -3,7 +3,11 @@ package planner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	log "log/slog"
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
@@ -65,9 +69,18 @@ WORKFLOW: Review requirements → Add/adjust tests or validation cases → Run t
 	case "execution":
 		return `PHASE: Execution & Implementation
 OBJECTIVE: Implementation mode for applying changes safely in a continuous Ask/ReAct transaction
+
+CRITICAL: If you have test failures and source context, IMMEDIATELY generate patches. DO NOT continue investigating.
+
+WORKFLOW:
+1. IF test failures identified AND source files examined → GENERATE patches NOW (use preview_patch)
+2. IF patches previewed → Apply them (use apply_patch or apply_multi_file_patch)
+3. IF patches applied → Run tests to validate (use run_tests)
+4. IF validation complete → Capture results
+
 SAFETY: Always preview before apply
 MULTI-FILE: Use apply_multi_file_patch for multiple related files (faster than sequential apply_patch)
-WORKFLOW: Preview → Approve → Apply → Test → Capture results → Summarize or continue implementation as needed`
+INVESTIGATION: Only gather MORE context if patches fail validation and you need additional information`
 	case "review":
 		return `PHASE: Review & Validation
 OBJECTIVE: Legacy review phase for older artifacts; prefer validating inside implementation mode in the current coding runtime
@@ -141,8 +154,78 @@ func (p *CodingPhase) ExposeTools() []capabilities.ToolDefinition {
 		Schema:      stateToolSchema(),
 	}}
 
+	// Add universal tools available to ALL phases
+	tools = append(tools, p.getCodingUniversalTools()...)
+
+	// Add phase-specific tools
 	tools = append(tools, p.getCodingTools()...)
 	return tools
+}
+
+// getCodingUniversalTools returns tools available to ALL coding phases.
+// These enable core operations like running tests, reading files, and searching repos.
+func (p *CodingPhase) getCodingUniversalTools() []capabilities.ToolDefinition {
+	taskSchema := `{
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {"type": "string", "description": "Task description or query"},
+    "working_dir": {"type": "string", "description": "Use 'current' for session working directory (default if omitted). Never pass absolute paths."},
+    "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
+  }
+}`
+
+	readFileSchema := `{
+  "type": "object",
+  "required": ["file_path"],
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to file to read"},
+    "start_line": {"type": "integer", "minimum": 1, "description": "First line to read (default 1)"},
+    "end_line": {"type": "integer", "minimum": 1, "description": "Last line to read (default 200)"},
+    "working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory (default if omitted)"},
+    "query": {"type": "string", "description": "Optional context about why you're reading this file"}
+  }
+}`
+
+	searchSchema := `{
+  "type": "object",
+  "required": ["query", "working_dir"],
+  "properties": {
+    "query": {"type": "string", "description": "Task description"},
+    "search": {"type": "string", "description": "Search query for patterns or code (optional)"},
+    "working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory. Never pass absolute paths."}
+  }
+}`
+
+	return []capabilities.ToolDefinition{{
+		Name:        p.phaseToolName("run_tests"),
+		Description: "Runs tests and validation commands. Returns structured test results with error details.",
+		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("read_file"),
+		Description: "Reads complete file content from repository. Use for inspecting source code, tests, or configuration files.",
+		Schema:      readFileSchema,
+	}, {
+		Name:        p.phaseToolName("search_repo"),
+		Description: "Searches repository for code patterns using regex. Returns matching code snippets with line numbers.",
+		Schema:      searchSchema,
+	}, {
+		Name:        p.phaseToolName("build_context"),
+		Description: "Builds comprehensive repository context including structure, files, and dependencies.",
+		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("inspect_repo"),
+		Description: "Inspects current repository state including git status, uncommitted changes, and diffs.",
+		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("list_changed_files"),
+		Description: "Lists files with uncommitted changes in the repository.",
+		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("index_repo_structure"),
+		Description: "Indexes repository structure using AST analysis. Returns function names, imports, and call relationships.",
+		Schema:      taskSchema,
+	}}
 }
 
 func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
@@ -153,15 +236,6 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
     "query": {"type": "string"},
     "working_dir": {"type": "string"},
     "active_file": {"type": "string"}
-  }
-}`
-
-	searchSchema := `{
-  "type": "object",
-  "required": ["query"],
-  "properties": {
-    "query": {"type": "string"},
-    "search": {"type": "string"}
   }
 }`
 
@@ -210,30 +284,12 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 
 	switch p.phaseID {
 	case "intake":
-		return []capabilities.ToolDefinition{{
-			Name:        p.phaseToolName("build_context"),
-			Description: "Builds repository context if task involves code",
-			Schema:      taskSchema,
-		}}
+		// No phase-specific tools (universal tools available)
+		return nil
 
 	case "investigation":
-		return []capabilities.ToolDefinition{{
-			Name:        p.phaseToolName("build_context"),
-			Description: "REQUIRED FIRST: Builds repository context",
-			Schema:      taskSchema,
-		}, {
-			Name:        p.phaseToolName("inspect_repo"),
-			Description: "Inspects current repository state",
-			Schema:      taskSchema,
-		}, {
-			Name:        p.phaseToolName("search_repo"),
-			Description: "Searches repository for patterns",
-			Schema:      searchSchema,
-		}, {
-			Name:        p.phaseToolName("list_changed_files"),
-			Description: "Lists files with uncommitted changes",
-			Schema:      taskSchema,
-		}}
+		// All investigation tools now exposed as universal tools
+		return nil
 
 	case "planning":
 		return []capabilities.ToolDefinition{{
@@ -245,25 +301,14 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 			Description: "Creates phase succession path with checkpoints",
 			Schema:      successionSchema,
 		}, {
-			Name:        p.phaseToolName("build_context"),
-			Description: "REQUIRED: Builds repository context for planning",
-			Schema:      taskSchema,
-		}, {
 			Name:        p.phaseToolName("plan_changes"),
 			Description: "Generates execution plan. Use tests or validation cases as a design aid when they help specify contracts, interfaces, or expected behavior; avoid making TDD mandatory for exploratory work.",
 			Schema:      taskSchema,
 		}}
 
 	case "testing":
-		return []capabilities.ToolDefinition{{
-			Name:        p.phaseToolName("run_tests"),
-			Description: "Runs tests and validation commands. WHEN TO CALL: After adding or updating tests, or to validate the current implementation. Use tests as a design aid and regression check, not as a rigid requirement for exploratory work.",
-			Schema:      taskSchema,
-		}, {
-			Name:        p.phaseToolName("build_context"),
-			Description: "Builds context for test planning and failure triage.",
-			Schema:      taskSchema,
-		}}
+		// All testing tools now exposed as universal tools
+		return nil
 
 	case "execution":
 		return []capabilities.ToolDefinition{{
@@ -278,33 +323,15 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 			Name:        p.phaseToolName("apply_multi_file_patch"),
 			Description: "Applies patches to multiple files atomically. Use when generating/modifying multiple related files (e.g., adding feature with multiple components). More efficient than sequential apply_patch calls.",
 			Schema:      multiFilePatchSchema,
-		}, {
-			Name:        p.phaseToolName("run_tests"),
-			Description: "Runs tests after changes",
-			Schema:      taskSchema,
 		}}
 
 	case "review":
-		return []capabilities.ToolDefinition{{
-			Name:        p.phaseToolName("build_context"),
-			Description: "Builds context for review",
-			Schema:      taskSchema,
-		}, {
-			Name:        p.phaseToolName("inspect_repo"),
-			Description: "Inspects changes for review",
-			Schema:      taskSchema,
-		}, {
-			Name:        p.phaseToolName("run_tests"),
-			Description: "Runs comprehensive tests",
-			Schema:      taskSchema,
-		}}
+		// All review tools now exposed as universal tools
+		return nil
 
 	case "delivery":
-		return []capabilities.ToolDefinition{{
-			Name:        p.phaseToolName("build_context"),
-			Description: "Builds final context for delivery",
-			Schema:      taskSchema,
-		}}
+		// All delivery tools now exposed as universal tools
+		return nil
 
 	default:
 		return nil
@@ -318,42 +345,76 @@ func (p *CodingPhase) BuildInstructions(query string, state capabilities.Routing
 func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
 	_ = state
 
+	log.Info("[PHASE EXECUTE] CodingPhase tool execution started",
+		"tool_name", toolName,
+		"phase", p.phaseID,
+		"args_keys", func() []string {
+			keys := make([]string, 0, len(args))
+			for k := range args {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+
 	name := strings.ToLower(strings.TrimSpace(toolName))
 	if name == "" {
+		log.Error("[PHASE EXECUTE] Empty tool name")
 		return "", fmt.Errorf("empty tool name")
 	}
 
 	if name == strings.ToLower(p.captureTool) {
+		log.Info("[PHASE EXECUTE] Executing capture tool")
 		return p.runCapture(args)
 	}
 	if name == strings.ToLower(p.stateTool) {
+		log.Info("[PHASE EXECUTE] Executing state tool")
 		return p.runState(args)
 	}
 
+	log.Info("[PHASE EXECUTE] Matching tool name",
+		"normalized_name", name,
+		"expected_inspect_repo", strings.ToLower(p.phaseToolName("inspect_repo")),
+		"expected_run_tests", strings.ToLower(p.phaseToolName("run_tests")))
+
 	switch name {
 	case strings.ToLower(p.phaseToolName("assess_and_route")):
+		log.Info("[PHASE EXECUTE] Executing assess_and_route")
 		return p.runAssessAndRoute(args)
 	case strings.ToLower(p.phaseToolName("create_succession_path")):
+		log.Info("[PHASE EXECUTE] Executing create_succession_path")
 		return p.runCreateSuccessionPath(args)
 	case strings.ToLower(p.phaseToolName("build_context")):
+		log.Info("[PHASE EXECUTE] Executing build_context")
 		return p.runBuildContext(ctx, args)
 	case strings.ToLower(p.phaseToolName("inspect_repo")):
+		log.Info("[PHASE EXECUTE] Executing inspect_repo")
 		return p.runInspectRepo(ctx, args)
 	case strings.ToLower(p.phaseToolName("search_repo")):
 		return p.runSearchRepo(ctx, args)
 	case strings.ToLower(p.phaseToolName("list_changed_files")):
 		return p.runListChangedFiles(ctx, args)
+	case strings.ToLower(p.phaseToolName("read_file")):
+		return p.runReadFile(ctx, args)
+	case strings.ToLower(p.phaseToolName("index_repo_structure")):
+		return p.runIndexRepoStructure(ctx, args)
 	case strings.ToLower(p.phaseToolName("plan_changes")):
 		return p.runPlanChanges(ctx, args)
 	case strings.ToLower(p.phaseToolName("run_tests")):
+		log.Info("[PHASE EXECUTE] Executing run_tests")
 		return p.runTests(ctx, args)
 	case strings.ToLower(p.phaseToolName("preview_patch")):
+		log.Info("[PHASE EXECUTE] Executing preview_patch")
 		return p.runPreviewPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):
+		log.Info("[PHASE EXECUTE] Executing apply_patch")
 		return p.runApplyPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_multi_file_patch")):
+		log.Info("[PHASE EXECUTE] Executing apply_multi_file_patch")
 		return p.runApplyMultiFilePatch(ctx, args)
 	default:
+		log.Error("[PHASE EXECUTE] Unsupported tool",
+			"tool_name", toolName,
+			"normalized_name", name)
 		return "", fmt.Errorf("unsupported tool %q in coding workflow", toolName)
 	}
 }
@@ -420,14 +481,35 @@ func (p *CodingPhase) runBuildContext(ctx context.Context, args map[string]any) 
 }
 
 func (p *CodingPhase) runInspectRepo(ctx context.Context, args map[string]any) (string, error) {
+	log.Info("[runInspectRepo] Starting inspection", "args", args)
 	task := p.buildTask(ctx, args)
+	log.Info("[runInspectRepo] Task built",
+		"working_dir", task.WorkingDir,
+		"description", task.Description)
+
 	infra := p.ensureSharedInfrastructure()
+	if infra == nil {
+		log.Error("[runInspectRepo] Infrastructure is nil")
+		return "", fmt.Errorf("infrastructure not initialized")
+	}
 
 	repoOps := infra.NewRepoOperations()
+	if repoOps == nil {
+		log.Error("[runInspectRepo] RepoOperations is nil")
+		return "", fmt.Errorf("repo operations not initialized")
+	}
+
+	log.Info("[runInspectRepo] Calling InspectRepo",
+		"working_dir", task.WorkingDir)
 	summary, err := repoOps.InspectRepo(task, task.State)
 	if err != nil {
+		log.Error("[runInspectRepo] InspectRepo failed",
+			"error", err,
+			"working_dir", task.WorkingDir)
 		return "", fmt.Errorf("inspect repo: %w", err)
 	}
+	log.Info("[runInspectRepo] InspectRepo succeeded",
+		"changed_files_count", len(summary.ChangedFiles))
 
 	parts := []string{"Repository Inspection"}
 	if len(summary.ChangedFiles) > 0 {
@@ -479,6 +561,132 @@ func (p *CodingPhase) runListChangedFiles(ctx context.Context, args map[string]a
 		return "Changed Files: none", nil
 	}
 	return fmt.Sprintf("Changed Files:\n%s", strings.Join(files, "\n")), nil
+}
+
+func (p *CodingPhase) runReadFile(ctx context.Context, args map[string]any) (string, error) {
+	task, _ := cw.ResolveRepoWorkingDir(ctx, p.buildTask(ctx, args))
+
+	// Extract file_path
+	filePath := readPhaseString(args, "file_path", "")
+	if filePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	// Strip workspace-relative prefix if present to prevent path doubling
+	// Search results return paths like "lib/sop/tools/sopbackend/auth.go" (relative to workspace root)
+	// but working_dir is already "/Volumes/T7/sop-cloud/lib/sop"
+	// Joining creates: /Volumes/T7/sop-cloud/lib/sop + lib/sop/tools/... = /lib/sop/lib/sop/tools/... (DOUBLED!)
+	//
+	// Solution: Find how many trailing components of WorkingDir match the beginning of filePath
+	// Example: WorkingDir="/a/b/c/d", filePath="c/d/file.go" → strip "c/d/" → result="file.go"
+	workDirParts := strings.Split(filepath.Clean(task.WorkingDir), string(filepath.Separator))
+	pathParts := strings.Split(filepath.Clean(filePath), string(filepath.Separator))
+
+	// Find longest suffix of WorkingDir that matches prefix of filePath
+	stripCount := 0
+	for i := 1; i <= len(workDirParts) && i <= len(pathParts); i++ {
+		// Check if last i parts of WorkingDir match first i parts of filePath
+		match := true
+		for j := 0; j < i; j++ {
+			if workDirParts[len(workDirParts)-i+j] != pathParts[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			stripCount = i
+		}
+	}
+
+	// Strip the matching prefix from filePath
+	if stripCount > 0 {
+		filePath = filepath.Join(pathParts[stripCount:]...)
+	}
+
+	// Build absolute path
+	var absPath string
+	if filepath.IsAbs(filePath) {
+		absPath = filePath
+	} else {
+		absPath = filepath.Join(task.WorkingDir, filePath)
+	}
+
+	// Read entire file
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", filePath, err)
+	}
+
+	// Parse line range
+	startLine := 1
+	if start, ok := args["start_line"]; ok {
+		switch v := start.(type) {
+		case int:
+			startLine = v
+		case float64:
+			startLine = int(v)
+		}
+	}
+	if startLine < 1 {
+		startLine = 1
+	}
+
+	endLine := 200
+	if end, ok := args["end_line"]; ok {
+		switch v := end.(type) {
+		case int:
+			endLine = v
+		case float64:
+			endLine = int(v)
+		}
+	}
+
+	// Split into lines
+	lines := strings.Split(string(content), "\n")
+	totalLines := len(lines)
+
+	// Adjust end_line if not specified or exceeds file
+	if endLine == 200 && totalLines < 200 {
+		endLine = totalLines
+	} else if endLine > totalLines {
+		endLine = totalLines
+	}
+
+	if endLine < startLine {
+		endLine = startLine
+	}
+
+	// Build output with line numbers
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("File: %s (lines %d-%d of %d)\n", filePath, startLine, endLine, totalLines))
+
+	for i := startLine - 1; i < endLine && i < len(lines); i++ {
+		result.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+	}
+
+	if endLine < totalLines {
+		result.WriteString(fmt.Sprintf("\n(File continues to line %d. Use read_file with end_line=%d to see more)\n", totalLines, totalLines))
+	}
+
+	return result.String(), nil
+}
+
+func (p *CodingPhase) runIndexRepoStructure(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
+	resolvedTask, _ := cw.ResolveRepoWorkingDir(ctx, task)
+	if resolvedTask.WorkingDir == "" {
+		resolvedTask.WorkingDir = task.WorkingDir
+	}
+
+	// Use context pack operations for repo structure
+	infra := p.ensureSharedInfrastructure()
+	packOps := infra.NewContextPackOperations()
+	pack, err := packOps.BuildContextForTask(resolvedTask, resolvedTask.State)
+	if err != nil {
+		return "", fmt.Errorf("index repository: %w", err)
+	}
+
+	return formatContextPack(pack), nil
 }
 
 func (p *CodingPhase) runPlanChanges(ctx context.Context, args map[string]any) (string, error) {
