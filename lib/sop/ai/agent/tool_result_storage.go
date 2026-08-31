@@ -17,11 +17,11 @@ import (
 const (
 	// toolResultThreshold defines when LLM gets summary vs full output
 	// ALL results are written to temp file, but LLM gets full result if <= threshold
-	toolResultThreshold = 4 * 1024 // 4KB balances direct reasoning with prompt-budget protection
+	toolResultThreshold = 16 * 1024 // 16KB - most tool outputs fit inline, only massive results get file-backed
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
-	toolResultMaxInline = 1536 // 1.5KB (750 bytes head + 750 bytes tail)
+	toolResultMaxInline = 2048 // 2KB preview (1KB head + 1KB tail) for better context
 )
 
 // ToolResultStorage manages temporary file storage for large tool outputs
@@ -315,19 +315,87 @@ func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeK
 		}
 	}
 
-	// Guide the LLM on how to analyze the full output
+	// Smart, context-aware recommendation instead of generic menu
 	sb.WriteString("\n---\n")
 	sb.WriteString(fmt.Sprintf("Full output: %s (%.1fKB)\n", filePath, sizeKB))
-	sb.WriteString("Do not infer the final outcome from the truncated preview alone when the full result is file-backed.\n")
-	sb.WriteString("Use the saved file to confirm the outcome based on your request:\n")
-	sb.WriteString(fmt.Sprintf("  • Known signal or pass/fail token: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\")\n", filePath))
-	sb.WriteString(fmt.Sprintf("  • Open-ended review of a specific section: read_tool_result(file_path=\"%s\", start_line=X, end_line=Y)\n", filePath))
-	sb.WriteString(fmt.Sprintf("  • Targeted text analysis: analyze_tool_result(file_path=\"%s\", operation=\"grep\", pattern=\"PATTERN\")\n", filePath))
-	sb.WriteString(fmt.Sprintf("  • Slice lines: analyze_tool_result(file_path=\"%s\", operation=\"sed\", start_line=X, end_line=Y)\n", filePath))
-	sb.WriteString(fmt.Sprintf("  • Inspect boundaries: analyze_tool_result(file_path=\"%s\", operation=\"head\" or \"tail\", max_matches=N)\n", filePath))
-	sb.WriteString(fmt.Sprintf("  • Count content: analyze_tool_result(file_path=\"%s\", operation=\"wc\")\n", filePath))
+	
+	recommendation := s.getSmartRecommendation(toolName, head, filePath, sizeKB)
+	if recommendation != "" {
+		sb.WriteString(recommendation)
+	}
 
 	return sb.String()
+}
+
+// getSmartRecommendation provides context-aware next action based on tool and content
+func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath string, sizeKB float64) string {
+	lower := strings.ToLower(preview)
+	
+	// Repo inspection tools with massive output
+	if toolName == "inspect_repo" || toolName == "list_changed_files" {
+		if sizeKB > 100 {
+			return fmt.Sprintf("⚠️  Large repository scan (%.0fKB). This output is too broad to analyze directly.\n"+
+				"Next: Focus your query on specific files, directories, or patterns instead of processing all changes.\n", sizeKB)
+		}
+		return fmt.Sprintf("Review changed files in the preview above, then read specific files with read_file.\n")
+	}
+	
+	// Git log - usually want to find specific commits
+	if strings.Contains(toolName, "git_log") {
+		return fmt.Sprintf("To find specific commits: grep_tool_result(file_path=\"%s\", pattern=\"your-search-term\")\n", filePath)
+	}
+	
+	// Git diff - errors or specific changes
+	if strings.Contains(toolName, "git_diff") || strings.Contains(toolName, "git_status") {
+		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") {
+			return fmt.Sprintf("⚠️  Git operation encountered errors. Review the output above for details.\n")
+		}
+		return "Review the changes shown above. To see specific sections: read_tool_result with line ranges.\n"
+	}
+	
+	// Build/compilation output - look for errors
+	if strings.Contains(toolName, "build") || strings.Contains(toolName, "compile") {
+		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") {
+			return fmt.Sprintf("Build errors detected. Find them: grep_tool_result(file_path=\"%s\", pattern=\"error|fail\")\n", filePath)
+		}
+		return "Build output captured. Review preview above for any warnings or errors.\n"
+	}
+	
+	// Directory listings
+	if strings.Contains(toolName, "list_directory") || strings.Contains(toolName, "ls") {
+		lineCount := strings.Count(preview, "\n")
+		if lineCount > 100 {
+			return fmt.Sprintf("Large directory (%d+ items). Consider narrowing your search or filtering by file type.\n", lineCount)
+		}
+		return "Directory contents shown above.\n"
+	}
+	
+	// Search results
+	if strings.Contains(toolName, "search") || strings.Contains(toolName, "grep") || strings.Contains(toolName, "find") {
+		matchCount := strings.Count(preview, "\n")
+		if matchCount > 50 {
+			return fmt.Sprintf("Found %d+ matches. Consider refining your search pattern for better results.\n", matchCount)
+		}
+		if matchCount == 0 {
+			return "No matches found. Try a different search pattern or broaden your criteria.\n"
+		}
+		return fmt.Sprintf("Found %d match(es). Review results above.\n", matchCount)
+	}
+	
+	// Command execution output
+	if strings.Contains(toolName, "execute") || strings.Contains(toolName, "command") {
+		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "fail") {
+			return fmt.Sprintf("Command failed. Find errors: grep_tool_result(file_path=\"%s\", pattern=\"error|fail|fatal\")\n", filePath)
+		}
+		return "Command output captured. Review the preview above for results.\n"
+	}
+	
+	// Generic fallback - but still only ONE recommendation, not six
+	if sizeKB > 50 {
+		return fmt.Sprintf("Large output (%.0fKB). To analyze: grep_tool_result(file_path=\"%s\", pattern=\"your-search-term\")\n", sizeKB, filePath)
+	}
+	
+	return fmt.Sprintf("Output saved. To analyze: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\") or read_tool_result for specific lines.\n", filePath)
 }
 
 // Cleanup removes all stored files for this session

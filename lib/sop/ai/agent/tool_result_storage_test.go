@@ -164,9 +164,9 @@ func TestStoreResult_LargeFileBacked(t *testing.T) {
 		t.Errorf("Summary should include file path")
 	}
 
-	// Phase 2: Passing tests use standard summary format with explicit file-backed guidance.
-	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
-		t.Errorf("Summary should include standard analysis guidance")
+	// Phase 2.5: Smart recommendations instead of generic 6-option menu
+	if !strings.Contains(inline, "Full output:") {
+		t.Errorf("Summary should include output information")
 	}
 
 	if size != len(largeResult) {
@@ -188,9 +188,10 @@ func TestStoreResult_TestToolRecommendations(t *testing.T) {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
-	// Phase 2: Passing tests (no failure indicators) use standard summary format
-	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
-		t.Errorf("Expected standard analysis guidance for passing tests")
+	// Phase 2.5: Passing tests now get smart context-aware recommendations
+	// With generic tool name and no failure indicators, should get generic recommendation
+	if !strings.Contains(inline, "Full output:") {
+		t.Errorf("Expected output information for passing tests")
 	}
 }
 
@@ -208,18 +209,12 @@ func TestStoreResult_BuildToolRecommendations(t *testing.T) {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
-	// Phase 2: Build tools use standard summary format
-	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
-		t.Errorf("Expected standard analysis guidance for build tools")
+	// Phase 2: Build tools now get smart, context-aware recommendations
+	if !strings.Contains(inline, "Build output captured") && !strings.Contains(inline, "Build errors detected") {
+		t.Errorf("Expected build-specific recommendation, got: %s", inline)
 	}
 	if !strings.Contains(inline, filePath) {
-		t.Errorf("Expected concrete file path in analysis guidance, got: %s", inline)
-	}
-	if !strings.Contains(inline, "Do not infer the final outcome from the truncated preview alone") {
-		t.Errorf("Expected explicit warning against inferring from preview, got: %s", inline)
-	}
-	if !strings.Contains(inline, "grep_tool_result(file_path=") {
-		t.Errorf("Expected grep_tool_result recommendation for known-signal analysis, got: %s", inline)
+		t.Errorf("Expected concrete file path in output, got: %s", inline)
 	}
 }
 
