@@ -662,14 +662,19 @@ func (a *CopilotAgent) rewriteRetryMetaAsk(ctx context.Context, query string) (s
 		return query, false
 	}
 
-	if p := ai.GetSessionPayload(ctx); p != nil {
-		p.RetryRewriteState = &ai.RetryRewriteState{
-			OriginalQuery: query,
-			ResolvedQuery: resolved,
-			Status:        "resolved",
+	p := ai.GetSessionPayload(ctx)
+	if p == nil {
+		if !isTestMode() {
+			panic("resolveRetryRewrite: SessionPayload required to store retry state. Enable test mode via EnableTestMode() for tests.")
 		}
-		p.CurrentUserQuery = resolved
+		return resolved, true
 	}
+	p.RetryRewriteState = &ai.RetryRewriteState{
+		OriginalQuery: query,
+		ResolvedQuery: resolved,
+		Status:        "resolved",
+	}
+	p.CurrentUserQuery = resolved
 
 	return resolved, true
 }
@@ -686,7 +691,12 @@ func (a *CopilotAgent) rewriteConversationalMetaAsk(ctx context.Context, query s
 	}
 
 	clarificationDetails := ""
-	if p := ai.GetSessionPayload(ctx); p != nil {
+	p := ai.GetSessionPayload(ctx)
+	if p == nil {
+		if !isTestMode() {
+			panic("prepareClarificationError: SessionPayload required to manage clarification state. Enable test mode via EnableTestMode() for tests.")
+		}
+	} else {
 		if p.ClarificationState == nil {
 			p.ClarificationState = &ai.ClarificationState{}
 		}
@@ -2402,7 +2412,12 @@ func (b *BaselineReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) 
 					}
 				}
 
-				if p := ai.GetSessionPayload(ctx); p != nil {
+				p := ai.GetSessionPayload(ctx)
+				if p == nil {
+					if !isTestMode() {
+						panic("react loop: SessionPayload required to track interaction steps. Enable test mode via EnableTestMode() for tests.")
+					}
+				} else {
 					p.LastInteractionSteps = 0
 				}
 
@@ -2423,7 +2438,12 @@ func (b *BaselineReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) 
 							Command: tc.Tool,
 							Args:    tc.Args,
 						})
-						if p := ai.GetSessionPayload(ctx); p != nil {
+						p := ai.GetSessionPayload(ctx)
+						if p == nil {
+							if !isTestMode() {
+								panic("react loop script recording: SessionPayload required to track steps. Enable test mode via EnableTestMode() for tests.")
+							}
+						} else {
 							p.LastInteractionSteps++
 						}
 					}

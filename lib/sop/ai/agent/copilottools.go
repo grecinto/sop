@@ -890,7 +890,12 @@ func (a *CopilotAgent) toolSwitchDatabase(ctx context.Context, args map[string]a
 		return "", fmt.Errorf("database '%s' not found. Available: %v", dbName, names)
 	}
 
-	if p := ai.GetSessionPayload(ctx); p != nil {
+	p := ai.GetSessionPayload(ctx)
+	if p == nil {
+		if !isTestMode() {
+			return "", fmt.Errorf("toolUseDatabase: SessionPayload required to switch database context")
+		}
+	} else {
 		p.CurrentDB = dbName
 		p.Transaction = nil
 	}

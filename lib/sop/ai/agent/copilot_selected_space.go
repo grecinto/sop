@@ -40,6 +40,9 @@ func selectedSpaceHasEvidence(configText, briefText, digestText string) bool {
 func (a *CopilotAgent) selectedSpaceExpertContext(ctx context.Context, query string, compact bool) string {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
+		if !isTestMode() {
+			panic("selectedSpaceExpertContext: SessionPayload required but was nil. Enable test mode via EnableTestMode() for tests.")
+		}
 		return ""
 	}
 

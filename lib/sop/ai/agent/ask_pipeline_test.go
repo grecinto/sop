@@ -469,6 +469,7 @@ func TestTryAskColdStartRouting_AttachesAskClassification(t *testing.T) {
 }
 
 func TestAsk_PersistsPhasePlanForDiscoveryColdStart(t *testing.T) {
+	EnableTestModeForTest(t) // Test uses context.Background() without SessionPayload
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
 	ag.service.session.Memory.AddThread(&ConversationThread{ID: sop.NewUUID(), RootPrompt: "Investigate stores"})

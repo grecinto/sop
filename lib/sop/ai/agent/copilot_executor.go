@@ -14,6 +14,7 @@ import (
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/ai/memory"
+	"github.com/sharedcode/sop/btree"
 )
 
 // NewCopilotAgent creates a new instance of CopilotAgent.
@@ -281,9 +282,51 @@ func (a *CopilotAgent) Open(ctx context.Context) error {
 	// Initialize strict physical cognitive buffers only for service-backed sessions.
 	// Standalone tests and lightweight agent instances can run without the background
 	// STM worker, which avoids leaking on-disk state into temp directories.
-	if a.service != nil || ai.GetSessionPayload(ctx) != nil {
+	if a.service == nil && ai.GetSessionPayload(ctx) == nil {
+		if !isTestMode() {
+			panic("CopilotAgent.Initialize: Service or SessionPayload required for initialization. Enable test mode via EnableTestMode() for tests.")
+		}
+		// Test mode: skip initialization
+	} else {
 		if err := a.InitializePhysicalMemory(ctx); err != nil {
 			log.Warn("CopilotAgent: STM Initialization failure", "error", err)
+		}
+
+		// Rehydrate session memory from persisted workstream state
+		// This allows users to resume paused work from previous sessions
+		if a.service != nil && a.service.session != nil && a.service.session.Memory != nil && a.Memory != nil {
+			stmStore := a.Memory.STMStore()
+			if stmStore != nil && stmStore.Primary() != nil {
+				// Load persisted workstreams (if any)
+				if err := a.service.session.Memory.Rehydrate(ctx, stmStore.Primary()); err != nil {
+					log.Warn("CopilotAgent: Failed to rehydrate session memory, starting fresh", "error", err)
+				} else {
+					// Show reminder about paused workstreams
+					// User can then choose to resume or start new work
+					reminder := a.service.session.Memory.FormatPausedWorkStreamsReminder()
+					if reminder != "" {
+						log.Info("CopilotAgent: Paused workstreams available", "reminder", reminder)
+
+						// Send reminder to chat UI if event streamer is available
+						if sendEvent, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && sendEvent != nil {
+							sendEvent("content", reminder)
+						}
+						// Note: If no event streamer yet (early initialization), the reminder
+						// will be shown on first user interaction via list_workstreams tool
+					}
+				}
+
+				// Hook up automatic persistence on STM batch commits
+				stmStore.SetSessionStatePersister(func(persistCtx context.Context, btreeInstance btree.BtreeInterface[string, any]) error {
+					if a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+						if !isTestMode() {
+							panic("SetSessionStatePersister: Service with session memory required for persistence. Enable test mode via EnableTestMode() for tests.")
+						}
+						return nil
+					}
+					return a.service.session.Memory.Persist(persistCtx, btreeInstance)
+				})
+			}
 		}
 	}
 

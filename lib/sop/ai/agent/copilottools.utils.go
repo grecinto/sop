@@ -21,13 +21,37 @@ const (
 	CtxKeyAtomicLastResult    = "_atomic_last_result"
 )
 
+// testModeEnabled is a package-level flag that enables test-only fallbacks.
+// Set via EnableTestMode() in tests.
+var testModeEnabled bool
+
+// EnableTestMode enables test mode for the entire package.
+// This allows fallback behaviors for nil/missing values.
+func EnableTestMode() {
+	testModeEnabled = true
+}
+
+// DisableTestMode disables test mode.
+// Use this in test cleanup to reset state between tests.
+func DisableTestMode() {
+	testModeEnabled = false
+}
+
+// isTestMode checks if test mode is enabled at the package level.
+func isTestMode() bool {
+	return testModeEnabled
+}
+
 func getOrInitScriptContext(ctx context.Context) *ScriptContext {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
-		// Fallback for context-less usage (should verify if this introduces shared state risk if the agent caches it)
-		// For now, return a new transient context if no payload.
-		// NOTE: In production, payload MUST exist for state persistence within a session.
-		return NewScriptContext()
+		// PRODUCTION: Fail fast if no payload - this indicates a bug
+		// TEST MODE: Return transient context for backward compatibility
+		if isTestMode() {
+			return NewScriptContext()
+		}
+		// In production SDK usage, this MUST fail
+		panic("getOrInitScriptContext: SessionPayload is required but was nil. Enable test mode via EnableTestMode() for tests.")
 	}
 	if p.Variables == nil {
 		p.Variables = make(map[string]any)
@@ -45,6 +69,9 @@ func getOrInitScriptContext(ctx context.Context) *ScriptContext {
 func getLastAtomicResult(ctx context.Context) any {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil || p.Variables == nil {
+		if !isTestMode() {
+			panic("getLastAtomicResult: SessionPayload with Variables required. Enable test mode via EnableTestMode() for tests.")
+		}
 		return nil
 	}
 	return p.Variables[CtxKeyAtomicLastResult]
@@ -57,6 +84,8 @@ func setLastAtomicResult(ctx context.Context, res any) {
 			p.Variables = make(map[string]any)
 		}
 		p.Variables[CtxKeyAtomicLastResult] = res
+	} else if !isTestMode() {
+		panic("setLastAtomicResult: SessionPayload required to store result. Enable test mode via EnableTestMode() for tests.")
 	}
 }
 

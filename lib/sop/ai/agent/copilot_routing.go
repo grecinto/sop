@@ -128,12 +128,17 @@ func (a *CopilotAgent) persistRoutingState(ctx context.Context, taskCtx *TaskCon
 	if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		a.service.session.Memory.SetRoutingState(taskCtx)
 	}
-	if p := ai.GetSessionPayload(ctx); p != nil {
-		if p.Variables == nil {
-			p.Variables = make(map[string]any)
+	p := ai.GetSessionPayload(ctx)
+	if p == nil {
+		if !isTestMode() {
+			panic("saveClassificationToContext: SessionPayload required to save routing state. Enable test mode via EnableTestMode() for tests.")
 		}
-		p.Variables["RoutingState"] = taskCtx
+		return
 	}
+	if p.Variables == nil {
+		p.Variables = make(map[string]any)
+	}
+	p.Variables["RoutingState"] = taskCtx
 }
 
 func (a *CopilotAgent) tryPrefixBasedRouting(ctx context.Context, query string, gen ai.Generator, isTest bool, anchor *TaskContextClassification) (*TaskContextClassification, error) {

@@ -16,8 +16,14 @@ func (a *CopilotAgent) toolExplainJoin(ctx context.Context, args map[string]any)
 	// Resolve Database
 	var db *database.Database
 	dbName, _ := args["database"].(string)
-	if dbName == "" && p != nil {
-		dbName = p.CurrentDB
+	if dbName == "" {
+		if p == nil {
+			if !isTestMode() {
+				return "", fmt.Errorf("toolExplainJoin: SessionPayload required to resolve database")
+			}
+		} else {
+			dbName = p.CurrentDB
+		}
 	}
 	if dbName != "" {
 		if dbName == "system" && a.systemDB != nil {

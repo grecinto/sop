@@ -305,6 +305,9 @@ func (a *CopilotAgent) clearRetryRewriteState(ctx context.Context) {
 func (a *CopilotAgent) updateClarificationState(ctx context.Context, query string, finalText string, toolCalls []ai.ToolCall, clarificationRequest *ai.ClarificationRequest) {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
+		if !isTestMode() {
+			panic("updateClarificationState: SessionPayload required but was nil. Enable test mode via EnableTestMode() for tests.")
+		}
 		return
 	}
 	if clarificationRequest != nil {

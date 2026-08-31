@@ -596,6 +596,9 @@ Format:
 func (s *Service) Open(ctx context.Context) error {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
+		if !isTestMode() {
+			return fmt.Errorf("Service.Open: SessionPayload required but was nil. Enable test mode via EnableTestMode() for tests.")
+		}
 		return nil
 	}
 

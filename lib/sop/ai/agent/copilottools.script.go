@@ -162,6 +162,8 @@ func (a *CopilotAgent) toolCreateScript(ctx context.Context, args map[string]any
 	var currentDB string
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		currentDB = p.CurrentDB
+	} else if !isTestMode() {
+		panic("toolLogScript: SessionPayload required to capture database context. Enable test mode via EnableTestMode() for tests.")
 	}
 	script := ai.Script{
 		Description: description,
@@ -263,6 +265,8 @@ func (a *CopilotAgent) toolSaveScript(ctx context.Context, args map[string]any) 
 	var currentDB string
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		currentDB = p.CurrentDB
+	} else if !isTestMode() {
+		panic("toolCaptureScript: SessionPayload required to capture database context. Enable test mode via EnableTestMode() for tests.")
 	}
 	script := ai.Script{
 		Description: description,

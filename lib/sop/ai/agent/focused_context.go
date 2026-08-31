@@ -394,6 +394,9 @@ func (a *CopilotAgent) buildSpacesFocusedExecutionContext(taskClassification Tas
 func (a *CopilotAgent) getActiveSessionDatabase(ctx context.Context) (*database.Database, string) {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil || p.CurrentDB == "" {
+		if !isTestMode() {
+			panic("getActiveSessionDatabase: SessionPayload with CurrentDB required. Enable test mode via EnableTestMode() for tests.")
+		}
 		return nil, ""
 	}
 	if p.CurrentDB == SystemDBName {
