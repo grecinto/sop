@@ -174,6 +174,88 @@ type StepDefinition struct {
 	CompletedAt   int64          `json:"completed_at"`  // Timestamp
 }
 
+// WorkInventory represents a generic list of work items to complete.
+// Generalizes the FailureClusters pattern to work across all domains.
+// Added Aug 31, 2026 to support itemized progress tracking universally.
+type WorkInventory struct {
+	Items          []InventoryItem `json:"items"`                     // All work items in the inventory
+	ActiveItemID   string          `json:"active_item_id,omitempty"`  // ID of current work item
+	CompletedItems []string        `json:"completed_items,omitempty"` // IDs of completed items
+	InventoryType  string          `json:"inventory_type"`            // "test_failures", "functions", "bugs", "files", "endpoints", etc.
+	CapturedAt     int64           `json:"captured_at,omitempty"`     // When inventory was compiled
+}
+
+// InventoryItem represents a single unit of work within an inventory.
+type InventoryItem struct {
+	ID          string         `json:"id"`                     // Unique ID: "test:TestAuth", "function:handleLogin", "bug:AUTH-123"
+	Type        string         `json:"type"`                   // "test", "function", "bug", "file", "endpoint"
+	DisplayName string         `json:"display_name"`           // Human-readable name (stripped of prefixes)
+	Description string         `json:"description,omitempty"`  // Optional detailed description
+	Metadata    map[string]any `json:"metadata,omitempty"`     // Domain-specific data
+	Status      string         `json:"status"`                 // "pending", "active", "completed", "failed", "blocked"
+	StartedAt   int64          `json:"started_at,omitempty"`   // When work began on this item
+	CompletedAt int64          `json:"completed_at,omitempty"` // When work completed
+	Attempts    int            `json:"attempts,omitempty"`     // Number of fix attempts
+}
+
+// GetActiveItem returns the currently active work item, or nil if none active
+func (wi *WorkInventory) GetActiveItem() *InventoryItem {
+	if wi == nil || wi.ActiveItemID == "" {
+		return nil
+	}
+	for i := range wi.Items {
+		if wi.Items[i].ID == wi.ActiveItemID {
+			return &wi.Items[i]
+		}
+	}
+	return nil
+}
+
+// GetPendingItems returns all items with status "pending"
+func (wi *WorkInventory) GetPendingItems() []InventoryItem {
+	if wi == nil {
+		return nil
+	}
+	var pending []InventoryItem
+	for _, item := range wi.Items {
+		if item.Status == "pending" {
+			pending = append(pending, item)
+		}
+	}
+	return pending
+}
+
+// MarkItemCompleted marks an item as completed and moves to next pending
+func (wi *WorkInventory) MarkItemCompleted(itemID string) bool {
+	if wi == nil {
+		return false
+	}
+
+	// Mark item as completed
+	for i := range wi.Items {
+		if wi.Items[i].ID == itemID {
+			wi.Items[i].Status = "completed"
+			wi.Items[i].CompletedAt = time.Now().UnixMilli()
+			wi.CompletedItems = append(wi.CompletedItems, itemID)
+			break
+		}
+	}
+
+	// Move to next pending item
+	for i := range wi.Items {
+		if wi.Items[i].Status == "pending" {
+			wi.ActiveItemID = wi.Items[i].ID
+			wi.Items[i].Status = "active"
+			wi.Items[i].StartedAt = time.Now().UnixMilli()
+			return true
+		}
+	}
+
+	// No more pending items
+	wi.ActiveItemID = ""
+	return false
+}
+
 // WorkStreamContext captures the phase progression and artifacts
 type WorkStreamContext struct {
 	CurrentPhase   string                    `json:"current_phase"` // Current executing phase
@@ -212,7 +294,11 @@ type WorkStreamContext struct {
 	CompletionSummary string   `json:"completion_summary,omitempty"`
 	UpdatedFiles      []string `json:"updated_files,omitempty"`
 
-	// Failing-test workflow state
+	// Generic work inventory (Aug 31, 2026 - replaces domain-specific tracking)
+	WorkInventory *WorkInventory `json:"work_inventory,omitempty"`
+
+	// Failing-test workflow state (DEPRECATED: Use WorkInventory instead)
+	// Kept for backward compatibility during transition
 	FailureClusters          []string `json:"failure_clusters,omitempty"`
 	ActiveFailureCluster     string   `json:"active_failure_cluster,omitempty"`
 	FailureInventoryCaptured bool     `json:"failure_inventory_captured,omitempty"`

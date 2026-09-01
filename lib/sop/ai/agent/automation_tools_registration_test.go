@@ -1113,10 +1113,18 @@ func TestListDirectoryEmitsFormattedContentThroughEventStreamer(t *testing.T) {
 	}
 
 	var got []string
+	var terminalCommands []string
 	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
 		if eventType == "content" {
 			if content, ok := payload.(string); ok {
 				got = append(got, content)
+			}
+		}
+		if eventType == "terminal_command" {
+			if payloadMap, ok := payload.(map[string]any); ok {
+				if text, ok := payloadMap["text"].(string); ok {
+					terminalCommands = append(terminalCommands, text)
+				}
 			}
 		}
 	})
@@ -1129,9 +1137,16 @@ func TestListDirectoryEmitsFormattedContentThroughEventStreamer(t *testing.T) {
 	if !strings.Contains(out, "- alpha.txt") {
 		t.Fatalf("toolListDirectory() output = %q", out)
 	}
-	// Directory listing should NOT stream to chat history
+	// Directory listing should NOT stream content to chat history
 	if len(got) > 0 {
 		t.Fatalf("expected list_directory to NOT emit content chunks to chat, got %d chunks", len(got))
+	}
+	// But should emit terminal command for visibility
+	if len(terminalCommands) != 1 {
+		t.Fatalf("expected 1 terminal command, got %d", len(terminalCommands))
+	}
+	if !strings.Contains(terminalCommands[0], "Listing directory") {
+		t.Fatalf("expected terminal command to contain 'Listing directory', got %q", terminalCommands[0])
 	}
 }
 

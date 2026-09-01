@@ -844,3 +844,320 @@ func TestBuildSpacesCRUDOperationsContext_DeleteUsesDeleteSpace(t *testing.T) {
 		t.Fatalf("expected delete guidance to require confirmation wording: %s", ctx)
 	}
 }
+
+// ========================================================================
+// Work Inventory Progress Tracker Tests (Aug 31, 2026)
+// Generic implementation that works across all domains
+// ========================================================================
+
+func TestFormatWorkInventoryProgress_Empty(t *testing.T) {
+	result := formatWorkInventoryProgress(nil)
+	if result != "" {
+		t.Errorf("Expected empty string for nil inventory, got: %s", result)
+	}
+
+	emptyInventory := &WorkInventory{Items: []InventoryItem{}}
+	result = formatWorkInventoryProgress(emptyInventory)
+	if result != "" {
+		t.Errorf("Expected empty string for empty inventory, got: %s", result)
+	}
+}
+
+func TestFormatWorkInventoryProgress_SingleItem(t *testing.T) {
+	inventory := &WorkInventory{
+		InventoryType: "test_failures",
+		ActiveItemID:  "test:TestAuth",
+		Items: []InventoryItem{
+			{ID: "test:TestAuth", Type: "test", DisplayName: "TestAuth", Status: "active"},
+		},
+	}
+
+	result := formatWorkInventoryProgress(inventory)
+
+	if !strings.Contains(result, "Total items: 1") {
+		t.Errorf("Expected 'Total items: 1', got: %s", result)
+	}
+	if !strings.Contains(result, "◉") {
+		t.Errorf("Expected active marker ◉, got: %s", result)
+	}
+	if !strings.Contains(result, "CURRENT TARGET") {
+		t.Errorf("Expected 'CURRENT TARGET', got: %s", result)
+	}
+	if !strings.Contains(result, "TestAuth") {
+		t.Errorf("Expected 'TestAuth', got: %s", result)
+	}
+}
+
+func TestFormatWorkInventoryProgress_MultipleItems(t *testing.T) {
+	inventory := &WorkInventory{
+		InventoryType: "functions",
+		ActiveItemID:  "function:handleLogin",
+		Items: []InventoryItem{
+			{ID: "function:handleLogin", Type: "function", DisplayName: "handleLogin", Status: "active"},
+			{ID: "function:handleLogout", Type: "function", DisplayName: "handleLogout", Status: "pending"},
+			{ID: "function:validateToken", Type: "function", DisplayName: "validateToken", Status: "pending"},
+		},
+	}
+
+	result := formatWorkInventoryProgress(inventory)
+
+	if !strings.Contains(result, "Total items: 3") {
+		t.Errorf("Expected 'Total items: 3', got: %s", result)
+	}
+
+	lines := strings.Split(result, "\n")
+	var activeFound bool
+	var pendingCount int
+
+	for _, line := range lines {
+		if strings.Contains(line, "◉") && strings.Contains(line, "handleLogin") {
+			activeFound = true
+			if !strings.Contains(line, "CURRENT TARGET") {
+				t.Errorf("Active item should have CURRENT TARGET marker")
+			}
+		}
+		if strings.Contains(line, "☐") {
+			pendingCount++
+		}
+	}
+
+	if !activeFound {
+		t.Errorf("Active marker not found on correct item")
+	}
+	if pendingCount != 2 {
+		t.Errorf("Expected 2 pending items, found %d", pendingCount)
+	}
+}
+
+func TestFormatWorkInventoryProgress_CompletedItems(t *testing.T) {
+	inventory := &WorkInventory{
+		InventoryType:  "bugs",
+		ActiveItemID:   "bug:AUTH-124",
+		CompletedItems: []string{"bug:AUTH-123"},
+		Items: []InventoryItem{
+			{ID: "bug:AUTH-123", Type: "bug", DisplayName: "Login timeout", Status: "completed"},
+			{ID: "bug:AUTH-124", Type: "bug", DisplayName: "Token refresh", Status: "active"},
+			{ID: "bug:AUTH-125", Type: "bug", DisplayName: "Session expiry", Status: "pending"},
+		},
+	}
+
+	result := formatWorkInventoryProgress(inventory)
+
+	if !strings.Contains(result, "Completed: 1") {
+		t.Errorf("Expected 'Completed: 1' in summary, got: %s", result)
+	}
+	if !strings.Contains(result, "✓") {
+		t.Errorf("Expected checkmark ✓ for completed item, got: %s", result)
+	}
+	if !strings.Contains(result, "(completed)") {
+		t.Errorf("Expected '(completed)' label, got: %s", result)
+	}
+}
+
+func TestFormatWorkInventoryProgress_DifferentInventoryTypes(t *testing.T) {
+	testCases := []struct {
+		inventoryType string
+		expectedTitle string
+	}{
+		{"test_failures", "TEST FAILURE PROGRESS TRACKER"},
+		{"functions", "FUNCTION IMPLEMENTATION PROGRESS"},
+		{"bugs", "BUG FIX PROGRESS TRACKER"},
+		{"files", "FILE UPDATE PROGRESS TRACKER"},
+		{"endpoints", "ENDPOINT IMPLEMENTATION PROGRESS"},
+		{"refactoring", "REFACTORING PROGRESS TRACKER"},
+		{"custom", "WORK PROGRESS TRACKER"},
+	}
+
+	for _, tc := range testCases {
+		title := getProgressTrackerTitle(tc.inventoryType)
+		if title != tc.expectedTitle {
+			t.Errorf("For type %s, expected title '%s', got '%s'", tc.inventoryType, tc.expectedTitle, title)
+		}
+	}
+}
+
+func TestFormatWorkInventoryProgress_StatusMarkers(t *testing.T) {
+	inventory := &WorkInventory{
+		InventoryType: "test_failures",
+		ActiveItemID:  "test:B",
+		Items: []InventoryItem{
+			{ID: "test:A", DisplayName: "TestA", Status: "completed"},
+			{ID: "test:B", DisplayName: "TestB", Status: "active"},
+			{ID: "test:C", DisplayName: "TestC", Status: "pending"},
+			{ID: "test:D", DisplayName: "TestD", Status: "failed"},
+			{ID: "test:E", DisplayName: "TestE", Status: "blocked"},
+		},
+	}
+
+	result := formatWorkInventoryProgress(inventory)
+
+	// Verify each status has correct marker
+	expectedMarkers := map[string]string{
+		"completed": "✓",
+		"active":    "◉",
+		"pending":   "☐",
+		"failed":    "✗",
+		"blocked":   "⊗",
+	}
+
+	for status, marker := range expectedMarkers {
+		if !strings.Contains(result, marker) {
+			t.Errorf("Expected marker '%s' for status '%s', not found in: %s", marker, status, result)
+		}
+	}
+}
+
+// ========================================================================
+// Legacy Failure Cluster Tests (Backward Compatibility)
+// ========================================================================
+
+func TestFormatFailureClusterProgress_Empty(t *testing.T) {
+	result := formatFailureClusterProgress([]string{}, "")
+	if result != "" {
+		t.Errorf("Expected empty string for empty clusters, got: %s", result)
+	}
+}
+
+func TestFormatFailureClusterProgress_SingleCluster(t *testing.T) {
+	clusters := []string{"package:github.com/sharedcode/sop/ai/agent"}
+	active := "package:github.com/sharedcode/sop/ai/agent"
+
+	result := formatFailureClusterProgress(clusters, active)
+
+	// Verify basic structure
+	if !strings.Contains(result, "Total failures: 1") {
+		t.Errorf("Expected 'Total failures: 1', got: %s", result)
+	}
+	if !strings.Contains(result, "◉") {
+		t.Errorf("Expected active marker ◉, got: %s", result)
+	}
+	if !strings.Contains(result, "CURRENT TARGET") {
+		t.Errorf("Expected 'CURRENT TARGET', got: %s", result)
+	}
+	if !strings.Contains(result, "github.com/sharedcode/sop/ai/agent") {
+		t.Errorf("Expected stripped package name, got: %s", result)
+	}
+}
+
+func TestFormatFailureClusterProgress_MultipleClusters(t *testing.T) {
+	clusters := []string{
+		"package:github.com/sharedcode/sop/ai/agent",
+		"test:TestAuthenticateUser",
+		"path:internal/validator/rules.go",
+	}
+	active := "test:TestAuthenticateUser"
+
+	result := formatFailureClusterProgress(clusters, active)
+
+	// Verify count
+	if !strings.Contains(result, "Total failures: 3") {
+		t.Errorf("Expected 'Total failures: 3', got: %s", result)
+	}
+
+	// Verify active marker on correct item
+	lines := strings.Split(result, "\n")
+	var activeLineFound bool
+	var pendingCount int
+
+	for _, line := range lines {
+		if strings.Contains(line, "◉") && strings.Contains(line, "TestAuthenticateUser") {
+			activeLineFound = true
+			if !strings.Contains(line, "CURRENT TARGET") {
+				t.Errorf("Active cluster should have CURRENT TARGET marker")
+			}
+		}
+		if strings.Contains(line, "☐") {
+			pendingCount++
+		}
+	}
+
+	if !activeLineFound {
+		t.Errorf("Active marker not found on correct cluster")
+	}
+	if pendingCount != 2 {
+		t.Errorf("Expected 2 pending items, found %d", pendingCount)
+	}
+}
+
+func TestFormatFailureClusterProgress_PrefixStripping(t *testing.T) {
+	testCases := []struct {
+		cluster  string
+		expected string
+	}{
+		{"package:github.com/foo/bar", "github.com/foo/bar"},
+		{"test:TestMyFunction", "TestMyFunction"},
+		{"path:internal/file.go", "internal/file.go"},
+		{"noprefix", "noprefix"},
+	}
+
+	for _, tc := range testCases {
+		clusters := []string{tc.cluster}
+		result := formatFailureClusterProgress(clusters, tc.cluster)
+
+		if !strings.Contains(result, tc.expected) {
+			t.Errorf("Expected stripped name '%s' in output, got: %s", tc.expected, result)
+		}
+	}
+}
+
+func TestFormatFailureClusterProgress_DefaultActiveCluster(t *testing.T) {
+	// When activeCluster is empty, should default to first cluster
+	clusters := []string{
+		"package:github.com/sharedcode/sop/ai/agent",
+		"test:TestAuthenticateUser",
+	}
+
+	result := formatFailureClusterProgress(clusters, "")
+
+	// First item should be marked as active
+	lines := strings.Split(result, "\n")
+	var firstItemActive bool
+
+	for _, line := range lines {
+		if strings.Contains(line, "1.") && strings.Contains(line, "◉") {
+			firstItemActive = true
+			break
+		}
+	}
+
+	if !firstItemActive {
+		t.Errorf("Expected first cluster to be marked active when activeCluster is empty")
+	}
+}
+
+func TestFormatFailureClusterProgress_Numbering(t *testing.T) {
+	clusters := []string{"test:A", "test:B", "test:C"}
+	result := formatFailureClusterProgress(clusters, "test:B")
+
+	// Verify sequential numbering
+	if !strings.Contains(result, "1. ☐") {
+		t.Errorf("Expected item 1 to be pending")
+	}
+	if !strings.Contains(result, "2. ◉") {
+		t.Errorf("Expected item 2 to be active")
+	}
+	if !strings.Contains(result, "3. ☐") {
+		t.Errorf("Expected item 3 to be pending")
+	}
+}
+
+func TestFormatFailureClusterProgress_VisualElements(t *testing.T) {
+	clusters := []string{"test:TestA", "test:TestB"}
+	result := formatFailureClusterProgress(clusters, "test:TestA")
+
+	// Verify key visual elements exist
+	requiredElements := []string{
+		"Total failures:",
+		"Fixing: 1 at a time",
+		"◉",         // Active marker
+		"☐",         // Pending marker
+		"🎯",         // Target emoji
+		"(pending)", // Pending label
+	}
+
+	for _, elem := range requiredElements {
+		if !strings.Contains(result, elem) {
+			t.Errorf("Expected visual element '%s' in output", elem)
+		}
+	}
+}

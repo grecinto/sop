@@ -1229,8 +1229,8 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 	}
 	path = resolveFilesystemPath(ctx, path)
 
-	// Note: Directory listing output is NOT streamed to chat history
-	// It's returned as the tool result only
+	// Show operation in chat history for visibility
+	emitTerminalCommand(ctx, fmt.Sprintf("# Listing directory: %s", path))
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -1303,6 +1303,13 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 	// Skip native client optimization to ensure consistent Terminal UI output
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			cmd := fmt.Sprintf("git --no-pager -C %s status", shellQuote(path))
+			if short {
+				cmd += " --short"
+			}
+			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
+			
 			changes, err := client.Status(path, repo.StatusOptions{Short: short})
 			if err != nil {
 				return "", err
@@ -1330,6 +1337,13 @@ func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (st
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			cmd := fmt.Sprintf("git --no-pager -C %s diff", shellQuote(path))
+			if staged {
+				cmd += " --staged"
+			}
+			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
+			
 			diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
 			if err != nil {
 				return "", err
@@ -1368,6 +1382,9 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s log --oneline -n %d", shellQuote(path), count))
+			
 			commits, err := client.Log(path, repo.LogOptions{MaxCount: count})
 			if err != nil {
 				return "", err
@@ -1391,6 +1408,9 @@ func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s branch --all", shellQuote(path)))
+			
 			branches, err := client.Branches(path)
 			if err != nil {
 				return "", err
@@ -1422,6 +1442,9 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s checkout %s", shellQuote(path), shellQuote(ref)))
+			
 			if err := client.Checkout(path, ref); err != nil {
 				return "", err
 			}
@@ -1447,6 +1470,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 	if localCommandExecutor == nil {
 		if client, err := newRepoClientForPath(path); err == nil {
 			files := []string{}
+			filesList := ""
 			if filesRaw, ok := args["files"]; ok {
 				if filesArray, ok := filesRaw.([]any); ok {
 					for _, f := range filesArray {
@@ -1464,6 +1488,20 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 					all = value
 				}
 			}
+			
+			// Emit terminal command for visibility
+			if len(files) > 0 {
+				filesList = strings.Join(files, " ")
+				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s add %s && git --no-pager -C %s commit -m %s",
+					shellQuote(path), filesList, shellQuote(path), shellQuote(message)))
+			} else if all {
+				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s add -A && git --no-pager -C %s commit -m %s",
+					shellQuote(path), shellQuote(path), shellQuote(message)))
+			} else {
+				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s commit -m %s",
+					shellQuote(path), shellQuote(message)))
+			}
+			
 			if err := client.Commit(path, message, repo.CommitOptions{Files: files, All: all}); err != nil {
 				return "", err
 			}
@@ -1507,7 +1545,15 @@ func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (st
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := newRepoClientForPath(path); err == nil {
-			if err := client.Pull(path, repo.PullOptions{Rebase: boolFlagFromArgs(args, "rebase")}); err != nil {
+			// Emit terminal command for visibility
+			rebase := boolFlagFromArgs(args, "rebase")
+			if rebase {
+				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s pull --rebase", shellQuote(path)))
+			} else {
+				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s pull", shellQuote(path)))
+			}
+			
+			if err := client.Pull(path, repo.PullOptions{Rebase: rebase}); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("Pulled latest changes for %s", path), nil
@@ -1537,6 +1583,13 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 	// When LocalCommandExecutor is available (daemon mode), always route through PTY
 	if localCommandExecutor == nil {
 		if client, err := repo.NewClientForPath(path); err == nil {
+			// Emit terminal command for visibility
+			cmd := fmt.Sprintf("git --no-pager -C %s push %s", shellQuote(path), remote)
+			if branch != "" {
+				cmd += " " + shellQuote(branch)
+			}
+			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
+			
 			if err := client.Push(path, repo.PushOptions{Remote: remote, Branch: branch}); err != nil {
 				return "", err
 			}
@@ -1969,6 +2022,7 @@ func (a *CopilotAgent) toolPostgresQuery(ctx context.Context, args map[string]an
 	query = applyPostgresQueryLimit(query, limit)
 
 	if postgresNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# PostgreSQL query: %s", truncateForDisplay(query, 100)))
 		cfg := buildPostgresConfig(args)
 		result, err := executePostgresQueryNative(ctx, cfg, query, false)
 		if err == nil {
@@ -2011,6 +2065,7 @@ func (a *CopilotAgent) toolPostgresExecute(ctx context.Context, args map[string]
 		return "", fmt.Errorf("postgres write access is not enabled")
 	}
 	if postgresNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# PostgreSQL execute: %s", truncateForDisplay(statement, 100)))
 		cfg := buildPostgresConfig(args)
 		result, err := executePostgresQueryNative(ctx, cfg, statement, true)
 		if err == nil {
@@ -2038,6 +2093,7 @@ func (a *CopilotAgent) toolPostgresExecute(ctx context.Context, args map[string]
 
 func (a *CopilotAgent) toolPostgresListTables(ctx context.Context, args map[string]any) (string, error) {
 	if postgresNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, "# Listing PostgreSQL tables")
 		cfg := buildPostgresConfig(args)
 		result, err := executePostgresQueryNative(ctx, cfg, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`, false)
 		if err == nil {
@@ -2074,6 +2130,7 @@ func (a *CopilotAgent) toolPostgresDescribeTable(ctx context.Context, args map[s
 	}
 	query := fmt.Sprintf(`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position`, table)
 	if postgresNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# Describing PostgreSQL table: %s", table))
 		cfg := buildPostgresConfig(args)
 		return executePostgresQueryNative(ctx, cfg, query, false)
 	}
@@ -2106,6 +2163,7 @@ func (a *CopilotAgent) toolSplunkSearch(ctx context.Context, args map[string]any
 	}
 
 	if splunkNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# Splunk search: %s", truncateForDisplay(query, 100)))
 		cfg := buildSplunkConfig(args)
 		if savedSearchName, ok := args["saved_search_name"].(string); ok && strings.TrimSpace(savedSearchName) != "" {
 			query = fmt.Sprintf("savedsearch %q", strings.TrimSpace(savedSearchName))
@@ -2162,6 +2220,7 @@ func (a *CopilotAgent) toolSplunkSearch(ctx context.Context, args map[string]any
 
 func (a *CopilotAgent) toolSplunkListSavedSearches(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, "# Listing Splunk saved searches")
 		cfg := buildSplunkConfig(args)
 		result, err := executeSplunkSearchNative(ctx, cfg, "| rest /services/saved/searches | table title")
 		if err == nil {
@@ -2174,6 +2233,7 @@ func (a *CopilotAgent) toolSplunkListSavedSearches(ctx context.Context, args map
 
 func (a *CopilotAgent) toolSplunkCreateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# Creating Splunk saved search: %s", args["name"]))
 		cfg := buildSplunkConfig(args)
 		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
 		if err == nil {
@@ -2190,6 +2250,7 @@ func (a *CopilotAgent) toolSplunkCreateSavedSearch(ctx context.Context, args map
 
 func (a *CopilotAgent) toolSplunkUpdateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# Updating Splunk saved search: %s", args["name"]))
 		cfg := buildSplunkConfig(args)
 		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
 		if err == nil {
@@ -2205,6 +2266,7 @@ func (a *CopilotAgent) toolSplunkUpdateSavedSearch(ctx context.Context, args map
 
 func (a *CopilotAgent) toolSplunkDeleteSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
+		emitTerminalCommand(ctx, fmt.Sprintf("# Deleting Splunk saved search: %s", args["name"]))
 		cfg := buildSplunkConfig(args)
 		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
 		if err == nil {
@@ -2588,6 +2650,13 @@ func pathDir(path string) string {
 		return "."
 	}
 	return path[:lastSlash]
+}
+
+func truncateForDisplay(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func shellQuote(value string) string {

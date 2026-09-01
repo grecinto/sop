@@ -110,10 +110,12 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	requirePlanFirst := shouldRequirePlanFirstForCodingAsk(query, brief, hasAuthoredPlan)
 
 	lines := []string{
-		"Coding Execution Context",
+		"EXECUTION PHASE - You are in patch generation mode",
+		"- CRITICAL: Investigation phase is complete. You ALREADY have context about the failures.",
+		"- DO NOT investigate further (no more search_repo, read_file only for generating patches, not exploration).",
+		"- PRIMARY OBJECTIVE: Generate and apply patches using preview_patch then apply_patch.",
 		"- Ask objective: complete as much of the active plan as possible in this Ask/ReAct turn before stopping.",
 		"- Stop only for clarification, approval, a real checkpoint, blocked validation, or genuine turn exhaustion.",
-		"- Do not externalize normal forward progress into phase movement when the next step can be completed in the current Ask/ReAct loop.",
 	}
 
 	if requirePlanFirst {
@@ -125,19 +127,188 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	} else {
 		lines = append(lines,
 			"- Execution contract: use the active execution brief as the working sequence for this turn.",
-			"- Step progression: start with the current step, do the action, validate it, then continue to the next step while progress remains local and safe.",
+			"- Step progression: start with the current step, do the action (GENERATE PATCHES), validate it, then continue to the next step while progress remains local and safe.",
 		)
 	}
 
 	lower := strings.ToLower(strings.TrimSpace(query))
 	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") {
 		lines = append(lines,
-			"- Failing-test policy: on a broad suite failure, isolate the failing package or test from the output, inspect the test and implementation, patch minimally, rerun that targeted check, and widen only after it passes.",
+			"- REQUIRED ACTION for test failures: Call preview_patch to generate the fix based on investigation results, then apply_patch, then run_tests to validate.",
+			"- Target specific failing tests, not the entire suite. Minimal patches only.",
 		)
+	}
+
+	// Add structured progress tracking (industry pattern: Cursor/Devin/Copilot Workspace)
+	// Aug 31, 2026: Generalized to work for ANY domain, not just test failures
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil {
+			// Try new generic WorkInventory first, fallback to legacy FailureClusters
+			var progressDisplay string
+			var trackerTitle string
+
+			if thread.StreamContext.WorkInventory != nil && len(thread.StreamContext.WorkInventory.Items) > 0 {
+				// New generic path
+				progressDisplay = formatWorkInventoryProgress(thread.StreamContext.WorkInventory)
+				trackerTitle = getProgressTrackerTitle(thread.StreamContext.WorkInventory.InventoryType)
+			} else if thread.StreamContext.FailureInventoryCaptured && len(thread.StreamContext.FailureClusters) > 0 {
+				// Legacy path (backward compatibility)
+				progressDisplay = formatFailureClusterProgress(
+					thread.StreamContext.FailureClusters,
+					thread.StreamContext.ActiveFailureCluster,
+				)
+				trackerTitle = "TEST FAILURE PROGRESS TRACKER"
+			}
+
+			if progressDisplay != "" {
+				lines = append(lines, "",
+					"═══════════════════════════════════════════",
+					trackerTitle,
+					"═══════════════════════════════════════════",
+					progressDisplay,
+					"",
+					"⚠️  CRITICAL: Fix ONLY the item marked ◉ CURRENT TARGET",
+					"⚠️  After fixing: Run TARGETED validation for that item only",
+					"⚠️  System automatically moves to next item after validation",
+					"═══════════════════════════════════════════",
+				)
+			}
+		}
 	}
 
 	if briefText := renderExecutionBrief(currentPhase, brief); briefText != "" {
 		lines = append(lines, briefText)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// formatWorkInventoryProgress creates a visual checklist for any work inventory
+// matching industry pattern (Cursor Composer, Devin, GitHub Copilot Workspace)
+// Generalized Aug 31, 2026 to work across all domains (tests, functions, bugs, files, etc.)
+func formatWorkInventoryProgress(inventory *WorkInventory) string {
+	if inventory == nil || len(inventory.Items) == 0 {
+		return ""
+	}
+
+	activeID := inventory.ActiveItemID
+	if activeID == "" && len(inventory.Items) > 0 {
+		activeID = inventory.Items[0].ID
+	}
+
+	var lines []string
+	pendingCount := 0
+	completedCount := 0
+	for _, item := range inventory.Items {
+		if item.Status == "pending" {
+			pendingCount++
+		} else if item.Status == "completed" {
+			completedCount++
+		}
+	}
+
+	// Summary line
+	lines = append(lines, fmt.Sprintf("Total items: %d | Completed: %d | Working: 1 at a time", len(inventory.Items), completedCount))
+	lines = append(lines, "")
+
+	// Item list
+	for i, item := range inventory.Items {
+		itemNum := i + 1
+		displayName := item.DisplayName
+		if displayName == "" {
+			displayName = item.ID
+		}
+
+		var marker string
+		var suffix string
+
+		switch item.Status {
+		case "active":
+			marker = "◉"
+			suffix = "← 🎯 CURRENT TARGET - WORK ON THIS NOW"
+		case "completed":
+			marker = "✓"
+			suffix = "(completed)"
+		case "failed":
+			marker = "✗"
+			suffix = "(failed - needs retry)"
+		case "blocked":
+			marker = "⊗"
+			suffix = "(blocked)"
+		default: // pending
+			marker = "☐"
+			suffix = "(pending)"
+		}
+
+		if item.ID == activeID && item.Status != "completed" {
+			// Force active marker if this is the active item
+			marker = "◉"
+			suffix = "← 🎯 CURRENT TARGET - WORK ON THIS NOW"
+		}
+
+		lines = append(lines, fmt.Sprintf("  %d. %s %s  %s", itemNum, marker, displayName, suffix))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// getProgressTrackerTitle returns the appropriate title based on inventory type
+func getProgressTrackerTitle(inventoryType string) string {
+	switch inventoryType {
+	case "test_failures":
+		return "TEST FAILURE PROGRESS TRACKER"
+	case "functions":
+		return "FUNCTION IMPLEMENTATION PROGRESS"
+	case "bugs":
+		return "BUG FIX PROGRESS TRACKER"
+	case "files":
+		return "FILE UPDATE PROGRESS TRACKER"
+	case "endpoints":
+		return "ENDPOINT IMPLEMENTATION PROGRESS"
+	case "refactoring":
+		return "REFACTORING PROGRESS TRACKER"
+	default:
+		return "WORK PROGRESS TRACKER"
+	}
+}
+
+// formatFailureClusterProgress creates a visual checklist of test failures
+// DEPRECATED: Use formatWorkInventoryProgress instead
+// Kept for backward compatibility with existing FailureClusters usage
+func formatFailureClusterProgress(allClusters []string, activeCluster string) string {
+	if len(allClusters) == 0 {
+		return ""
+	}
+
+	// Ensure active cluster is valid
+	if activeCluster == "" && len(allClusters) > 0 {
+		activeCluster = allClusters[0]
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Total failures: %d | Fixing: 1 at a time", len(allClusters)))
+	lines = append(lines, "")
+
+	for i, cluster := range allClusters {
+		clusterNum := i + 1
+		displayName := cluster
+
+		// Format display name for readability
+		if strings.HasPrefix(cluster, "package:") {
+			displayName = strings.TrimPrefix(cluster, "package:")
+		} else if strings.HasPrefix(cluster, "test:") {
+			displayName = strings.TrimPrefix(cluster, "test:")
+		} else if strings.HasPrefix(cluster, "path:") {
+			displayName = strings.TrimPrefix(cluster, "path:")
+		}
+
+		if cluster == activeCluster {
+			// Current target - make it super obvious
+			lines = append(lines, fmt.Sprintf("  %d. ◉ %s  ← 🎯 CURRENT TARGET - FIX THIS NOW", clusterNum, displayName))
+		} else {
+			// Pending items
+			lines = append(lines, fmt.Sprintf("  %d. ☐ %s  (pending)", clusterNum, displayName))
+		}
 	}
 
 	return strings.Join(lines, "\n")

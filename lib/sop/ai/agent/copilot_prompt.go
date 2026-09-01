@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/metrics"
 )
 
 func (a *CopilotAgent) renderToolDefinitionContext(title string, toolNames []string) string {
@@ -273,6 +274,14 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 
 	// 4. Active Custom KBs / Playbooks Lookups
 	// In the future, OMNI will be able to lookup multiple KBs, BUT OMNI will always assume persona from SOP.
+	// Detect phase early for conditional component generation
+	currentPhase := ""
+	if classification := taskClassification.AskClassification; classification != nil {
+		currentPhase = normalizePhase(classification.Phase)
+	}
+	isExecutionPhase := currentPhase == "execution"
+	isCodingWorkflow := isCodingWorkflowTaskClassification(taskClassification)
+
 	var domains []string
 	if p := ai.GetSessionPayload(ctx); p != nil && p.ActiveDomain != "" {
 		domains = strings.Split(p.ActiveDomain, ",")
@@ -280,12 +289,16 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 		domains = []string{"sop"}
 	}
 	playbooksContext := ""
-	if !leanStoresAssembly {
+	// Skip playbooks in execution phase for coding workflow (follow the plan, not generate new recipes)
+	if !leanStoresAssembly && !(isExecutionPhase && isCodingWorkflow) {
 		playbooksContext = a.getPlaybooksContext(ctx, query, domains)
 	}
 	builder.With(ComponentPlaybooks, playbooksContext)
 	builder.With(ComponentRecipes, a.getRecipeContext(taskClassification))
+
 	focusedExecutionContext := a.getFocusedExecutionContext(ctx, query, taskClassification)
+
+	// Memory continuation - always relevant
 	if memoryContinuation := a.getMemoryContinuationContext(taskClassification); memoryContinuation != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = memoryContinuation + "\n\n" + focusedExecutionContext
@@ -293,6 +306,8 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = memoryContinuation
 		}
 	}
+
+	// Ask outcome - always relevant
 	if askOutcome := a.getAskOutcomeContext(); askOutcome != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = askOutcome + "\n\n" + focusedExecutionContext
@@ -300,20 +315,30 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
-	if guidance := buildTaskGuidanceSynthesis(query, taskClassification); guidance != "" {
-		if focusedExecutionContext != "" {
-			focusedExecutionContext = guidance + "\n\n" + focusedExecutionContext
-		} else {
-			focusedExecutionContext = guidance
+
+	// Task guidance - Skip detailed guidance in execution phase (phase.BuildContext has it)
+	if !isExecutionPhase {
+		if guidance := buildTaskGuidanceSynthesis(query, taskClassification); guidance != "" {
+			if focusedExecutionContext != "" {
+				focusedExecutionContext = guidance + "\n\n" + focusedExecutionContext
+			} else {
+				focusedExecutionContext = guidance
+			}
 		}
 	}
-	if plannerContext := a.getPlannerContext(); plannerContext != "" {
-		if focusedExecutionContext != "" {
-			focusedExecutionContext = plannerContext + "\n\n" + focusedExecutionContext
-		} else {
-			focusedExecutionContext = plannerContext
+
+	// Planner context - NOT needed in execution phase
+	if !isExecutionPhase {
+		if plannerContext := a.getPlannerContext(); plannerContext != "" {
+			if focusedExecutionContext != "" {
+				focusedExecutionContext = plannerContext + "\n\n" + focusedExecutionContext
+			} else {
+				focusedExecutionContext = plannerContext
+			}
 		}
 	}
+
+	// Caveat context - always relevant
 	if caveatContext := a.getCaveatContext(); caveatContext != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = caveatContext + "\n\n" + focusedExecutionContext
@@ -321,6 +346,8 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = caveatContext
 		}
 	}
+
+	// General context - only for non-coding tasks
 	if isGeneralTaskContext(&taskClassification) {
 		generalContext := "General Ask Context:\n- This is an open-ended request that may cover any topic: coding, research, analysis, creative work, or general information.\n- Use the conversation history, memory continuity, and available tools to provide a helpful and accurate response.\n- Ask a short clarification question only if the request is genuinely ambiguous."
 		if focusedExecutionContext != "" {
@@ -329,7 +356,9 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = generalContext
 		}
 	}
-	if selectedSpaceGuidance != "" {
+
+	// Selected space guidance - only relevant for research workflows
+	if selectedSpaceGuidance != "" && !isExecutionPhase {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = selectedSpaceGuidance + "\n\n" + focusedExecutionContext
 		} else {
@@ -337,8 +366,8 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 		}
 	}
 
-	// Inject research workflow guidance for complex/advanced tasks
-	if taskClassification.ResearchRecommended {
+	// Research guidance - NOT needed in execution phase
+	if taskClassification.ResearchRecommended && !isExecutionPhase {
 		researchGuidance := a.buildResearchWorkflowGuidance(ctx, query, taskClassification)
 		if researchGuidance != "" {
 			if focusedExecutionContext != "" {
@@ -348,6 +377,8 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			}
 		}
 	}
+
+	// Memory recall - Includes MRU and recent exchanges, useful in all phases
 	if memoryRecall := a.buildVirtualMemoryRecallContext(ctx, query); memoryRecall != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = memoryRecall + "\n\n" + focusedExecutionContext
@@ -357,6 +388,26 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 	}
 	if leanStoresAssembly && strings.EqualFold(taskClassification.Domain, StoresDomain) {
 		focusedExecutionContext = trimPromptComponentContent(ComponentFocusedContext, focusedExecutionContext, 1000)
+	}
+
+	// Log context generation efficiency
+	slog.Info("Phase-aware context generation",
+		"phase", currentPhase,
+		"is_execution", isExecutionPhase,
+		"focused_context_chars", len(focusedExecutionContext),
+		"playbooks_included", playbooksContext != "",
+		"skipped_components", func() []string {
+			skipped := []string{}
+			if isExecutionPhase && isCodingWorkflow {
+				skipped = append(skipped, "playbooks", "task_guidance", "planner_context", "research_guidance", "memory_recall", "selected_space_guidance")
+			}
+			return skipped
+		}(),
+	)
+
+	// Record metrics for phase-aware context optimization (Aug 31, 2026)
+	if currentPhase != "" {
+		metrics.GlobalMetrics.RecordContextSize(currentPhase, len(focusedExecutionContext))
 	}
 
 	builder.With(ComponentFocusedContext, focusedExecutionContext)
@@ -381,6 +432,11 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 		"components_present", summarizePromptComponentsPresent(budgetReport),
 		"trimmed_components", summarizePromptBudgetTrim(budgetReport),
 	)
+
+	// Record budget trimming events (Aug 31, 2026)
+	if budgetReport.OriginalTotalChars > budgetReport.FinalTotalChars && currentPhase != "" {
+		metrics.GlobalMetrics.RecordContextTrim(currentPhase)
+	}
 	slog.Debug("LLM Context (OMNI)", "SystemPrompt", fullPrompt)
 
 	return fullPrompt
@@ -410,6 +466,17 @@ func (a *CopilotAgent) promptBudgetProfile(taskClassification TaskContextClassif
 			ComponentFocusedContext,
 			ComponentUserQuery,
 		},
+	}
+
+	// Phase-aware budget adjustment for execution phase
+	if isCodingWorkflowTaskClassification(taskClassification) {
+		if classification := taskClassification.AskClassification; classification != nil {
+			phase := normalizePhase(classification.Phase)
+			if phase == "execution" {
+				// Execution phase needs more room for phase instructions
+				profile.ComponentCharBudgets[ComponentFocusedContext] = 6000
+			}
+		}
 	}
 
 	switch taskClassification.RoutingGate {
