@@ -60,7 +60,8 @@ WORKFLOW: Ask questions → Build context → Document requirements → Capture 
 OBJECTIVE: Discovery mode for understanding current state and finding patterns
 REQUIRED: investigation_build_context (call first)
 WORKFLOW: Build context → Inspect repo → Search patterns → Document evidence → Continue directly into implementation when the next step is clear
-INVENTORY RULE: If the user asks to analyze a codebase, map the repo, or fix failing tests, call compile_artifact_inventory first, then operate on a selected inventory item rather than rediscovering the whole repo each turn`
+INVENTORY RULE: If the user asks to analyze a codebase, map the repo, or fix failing tests, call compile_artifact_inventory first, then operate on a selected inventory item rather than rediscovering the whole repo each turn
+FILE RULE: If you need adjacent files or companion tests, list the directory first instead of guessing sibling filenames.`
 	case "planning":
 		return `PHASE: Planning & Design
 OBJECTIVE: Discovery mode design aid when a concrete plan adds value
@@ -77,6 +78,8 @@ OBJECTIVE: Implementation mode for applying changes safely in a continuous Ask/R
 
 CRITICAL: If you have test failures and source context, IMMEDIATELY generate patches. DO NOT continue investigating.
 
+		When you need adjacent files or companion tests, use read_file for a known filename. Use list_directory only when you need to discover an unknown directory or sibling filenames first; do not feed list_directory a filename.
+
 SAME-TURN PIVOT RULE: If failing tests, relevant file reads, and the likely repair target are already known, transition to preview_patch immediately in this same Ask/ReAct turn. Do not wait for a separate phase handoff or queue item.
 
 WORKFLOW:
@@ -88,7 +91,7 @@ WORKFLOW:
 SAFETY: Always preview before apply
 MULTI-FILE: Use apply_multi_file_patch for multiple related files (faster than sequential apply_patch)
 INVESTIGATION: Only gather MORE context if patches fail validation and you need additional information
-INVENTORY RULE: If the task was compiled into an artifact inventory, or the request is to fix failing tests, work the current active item first, then mark it complete and advance to the next pending item`
+		ITEMS LIST RULE: If the task was compiled into an artifact inventory, treat that workstream item list as the source of steps/tasks to fix. Work the current active item first, then mark it complete and advance to the next pending item`
 	case "review":
 		return `PHASE: Review & Validation
 OBJECTIVE: Legacy review phase for older artifacts; prefer validating inside implementation mode in the current coding runtime
@@ -154,7 +157,7 @@ func (p *CodingPhase) EvaluateStepCompletion(query string, state capabilities.Ro
 func (p *CodingPhase) ExposeTools() []capabilities.ToolDefinition {
 	tools := []capabilities.ToolDefinition{{
 		Name:        p.captureTool,
-		Description: fmt.Sprintf("Captures %s phase artifact to memory", p.name),
+		Description: fmt.Sprintf("Captures %s phase artifact to workstream state", p.name),
 		Schema:      captureToolSchema(),
 	}, {
 		Name:        p.stateTool,
@@ -195,6 +198,16 @@ func (p *CodingPhase) getCodingUniversalTools() []capabilities.ToolDefinition {
   }
 }`
 
+	listDirectorySchema := `{
+	"type": "object",
+	"properties": {
+		"path": {"type": "string", "description": "Directory path to inspect. Defaults to the current working directory when omitted."},
+		"max_items": {"type": "integer", "minimum": 1, "description": "Maximum number of entries to return before truncating the listing."},
+		"working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory (default if omitted)"},
+		"query": {"type": "string", "description": "Optional context about why you're listing this directory"}
+	}
+}`
+
 	searchSchema := `{
   "type": "object",
   "required": ["query", "working_dir"],
@@ -204,20 +217,47 @@ func (p *CodingPhase) getCodingUniversalTools() []capabilities.ToolDefinition {
     "working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory. Never pass absolute paths."}
   }
 }`
-
-	return []capabilities.ToolDefinition{{
+	allowDiscoveryTools := p.shouldExposeInvestigationTools()
+	tools := []capabilities.ToolDefinition{{
 		Name:        p.phaseToolName("run_tests"),
 		Description: "Runs tests and validation commands. Returns structured test results with error details.",
 		Schema:      taskSchema,
 	}, {
+		// read_file and search_repo stay available even after diagnosis is complete:
+		// preview_patch/apply_patch require exact current file content for old_content, and the
+		// captured diagnosis often doesn't include an exact line number - without search_repo the
+		// model has no cheap way to locate it and gets stuck re-guessing read_file ranges or
+		// stalling to ask the user. Only list_directory and whole-repo scans get hidden once
+		// diagnosis is captured, since those don't help pinpoint an already-known file's content.
 		Name:        p.phaseToolName("read_file"),
-		Description: "Reads complete file content from repository. Use for inspecting source code, tests, or configuration files.",
+		Description: "Reads file content from repository. For files longer than ~200 lines, call search_repo FIRST to find the exact symbol/line number, then read a small range around it. Do not page through a large file sequentially with repeated calls.",
 		Schema:      readFileSchema,
 	}, {
 		Name:        p.phaseToolName("search_repo"),
 		Description: "Searches repository for code patterns using regex. Returns matching code snippets with line numbers.",
 		Schema:      searchSchema,
-	}, {
+	}}
+
+	if !allowDiscoveryTools {
+		return tools
+	}
+
+	// Narrow, targeted tool: safe to keep even in execution, since it lists a specific
+	// directory instead of scanning the whole repository.
+	tools = append(tools, capabilities.ToolDefinition{
+		Name:        p.phaseToolName("list_directory"),
+		Description: "Lists files and folders in a repository directory path only. Use this to discover unknown sibling files or directories; do not pass a filename.",
+		Schema:      listDirectorySchema,
+	})
+
+	// Whole-repo scan tools are expensive (can return hundreds of KB) and belong to
+	// investigation/planning. Execution already has the investigation context; re-running
+	// these here just burns the tool budget without moving toward a patch.
+	if p.phaseID == "execution" {
+		return tools
+	}
+
+	return append(tools, []capabilities.ToolDefinition{{
 		Name:        p.phaseToolName("build_context"),
 		Description: "Builds comprehensive repository context including structure, files, and dependencies.",
 		Schema:      taskSchema,
@@ -257,7 +297,104 @@ func (p *CodingPhase) getCodingUniversalTools() []capabilities.ToolDefinition {
     "item_id": {"type": "string", "description": "Inventory item id or display name"}
   }
 }`,
-	}}
+	}}...)
+}
+
+// shouldExposeInvestigationTools reports whether list_directory and whole-repo scan tools
+// should stay exposed. read_file and search_repo are intentionally NOT gated by this: patch
+// generation needs exact current file content for old_content, and the captured diagnosis
+// often lacks a precise line number, so hiding either once diagnosis is captured leaves the
+// model unable to locate or fetch the exact patch region and it stalls instead of patching.
+func (p *CodingPhase) shouldExposeInvestigationTools() bool {
+	if p == nil || p.phaseID != "execution" {
+		return true
+	}
+	// The capture tool persists via SharedInfrastructure.Memory under "phase-artifact:<phaseID>"
+	// (see runCapture/loadExistingArtifact); WorkStreamContext.PhaseArtifacts (below) is a
+	// separate map that capture never writes to, so checking it alone always sees it as empty
+	// and never hides these tools. Check the real persisted artifact first.
+	if diagnosisComplete, ok := p.diagnosisCompleteFromPersistedArtifact(); ok {
+		return !diagnosisComplete
+	}
+	if p.sharedInfra == nil || p.sharedInfra.STMAccessor == nil {
+		return true
+	}
+	stm := p.sharedInfra.STMAccessor()
+	if stm == nil {
+		return true
+	}
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return true
+	}
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return true
+	}
+	phaseArtifacts := streamCtx.GetPhaseArtifacts()
+	if len(phaseArtifacts) == 0 {
+		return true
+	}
+	artifact, ok := phaseArtifacts[p.phaseID]
+	if !ok || len(artifact) == 0 {
+		return true
+	}
+	structuredData, _ := artifact["structured_data"].(map[string]any)
+	if diagnosis, ok := structuredData["diagnosis"].(map[string]any); ok {
+		structuredData = diagnosis
+	}
+	if len(diagnosisFieldsMissing(structuredData, readPhaseStringSliceAsAny(artifact["evidence"]))) > 0 {
+		return true
+	}
+	return false
+}
+
+// diagnosisCompleteFromPersistedArtifact loads the phase's real persisted artifact (the same
+// store runCapture writes to) and reports whether it carries a complete diagnosis. The second
+// return value is false when no persisted artifact is available, so callers can fall back to
+// other sources instead of treating "no artifact" as "diagnosis complete".
+func (p *CodingPhase) diagnosisCompleteFromPersistedArtifact() (complete bool, found bool) {
+	artifact, err := p.loadExistingArtifact()
+	if err != nil || artifact.PhaseID == "" {
+		return false, false
+	}
+	structuredData := artifact.StructuredData
+	if diagnosis, ok := structuredData["diagnosis"].(map[string]any); ok {
+		structuredData = diagnosis
+	}
+	return len(diagnosisFieldsMissing(structuredData, artifact.Evidence)) == 0, true
+}
+
+func readPhaseStringSliceAsAny(value any) []string {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				trimmed := strings.TrimSpace(s)
+				if trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+		}
+		return out
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return nil
+		}
+		return []string{trimmed}
+	default:
+		trimmed := strings.TrimSpace(fmt.Sprint(v))
+		if trimmed == "" || trimmed == "<nil>" {
+			return nil
+		}
+		return []string{trimmed}
+	}
 }
 
 func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
@@ -377,7 +514,7 @@ func (p *CodingPhase) BuildInstructions(query string, state capabilities.Routing
 func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
 	_ = state
 
-	log.Info("[PHASE EXECUTE] CodingPhase tool execution started",
+	log.Debug("[PHASE EXECUTE] CodingPhase tool execution started",
 		"tool_name", toolName,
 		"phase", p.phaseID,
 		"args_keys", func() []string {
@@ -395,31 +532,31 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 	}
 
 	if name == strings.ToLower(p.captureTool) {
-		log.Info("[PHASE EXECUTE] Executing capture tool")
+		log.Debug("[PHASE EXECUTE] Executing capture tool")
 		return p.runCapture(args)
 	}
 	if name == strings.ToLower(p.stateTool) {
-		log.Info("[PHASE EXECUTE] Executing state tool")
+		log.Debug("[PHASE EXECUTE] Executing state tool")
 		return p.runState(args)
 	}
 
-	log.Info("[PHASE EXECUTE] Matching tool name",
+	log.Debug("[PHASE EXECUTE] Matching tool name",
 		"normalized_name", name,
 		"expected_inspect_repo", strings.ToLower(p.phaseToolName("inspect_repo")),
 		"expected_run_tests", strings.ToLower(p.phaseToolName("run_tests")))
 
 	switch name {
 	case strings.ToLower(p.phaseToolName("assess_and_route")):
-		log.Info("[PHASE EXECUTE] Executing assess_and_route")
+		log.Debug("[PHASE EXECUTE] Executing assess_and_route")
 		return p.runAssessAndRoute(args)
 	case strings.ToLower(p.phaseToolName("create_succession_path")):
-		log.Info("[PHASE EXECUTE] Executing create_succession_path")
+		log.Debug("[PHASE EXECUTE] Executing create_succession_path")
 		return p.runCreateSuccessionPath(args)
 	case strings.ToLower(p.phaseToolName("build_context")):
-		log.Info("[PHASE EXECUTE] Executing build_context")
+		log.Debug("[PHASE EXECUTE] Executing build_context")
 		return p.runBuildContext(ctx, args)
 	case strings.ToLower(p.phaseToolName("inspect_repo")):
-		log.Info("[PHASE EXECUTE] Executing inspect_repo")
+		log.Debug("[PHASE EXECUTE] Executing inspect_repo")
 		return p.runInspectRepo(ctx, args)
 	case strings.ToLower(p.phaseToolName("search_repo")):
 		return p.runSearchRepo(ctx, args)
@@ -427,6 +564,8 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runListChangedFiles(ctx, args)
 	case strings.ToLower(p.phaseToolName("read_file")):
 		return p.runReadFile(ctx, args)
+	case strings.ToLower(p.phaseToolName("list_directory")):
+		return p.runListDirectory(ctx, args)
 	case strings.ToLower(p.phaseToolName("index_repo_structure")):
 		return p.runIndexRepoStructure(ctx, args)
 	case strings.ToLower(p.phaseToolName("compile_artifact_inventory")):
@@ -438,17 +577,17 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 	case strings.ToLower(p.phaseToolName("plan_changes")):
 		return p.runPlanChanges(ctx, args)
 	case strings.ToLower(p.phaseToolName("run_tests")):
-		log.Info("[PHASE EXECUTE] Executing run_tests")
+		log.Debug("[PHASE EXECUTE] Executing run_tests")
 		return p.runTests(ctx, args)
 	case strings.ToLower(p.phaseToolName("preview_patch")):
-		log.Info("[PHASE EXECUTE] Executing preview_patch")
+		log.Debug("[PHASE EXECUTE] Executing preview_patch")
 		// Metrics recorded via copilot_prompt.go logging (Aug 31, 2026)
 		return p.runPreviewPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):
-		log.Info("[PHASE EXECUTE] Executing apply_patch")
+		log.Debug("[PHASE EXECUTE] Executing apply_patch")
 		return p.runApplyPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_multi_file_patch")):
-		log.Info("[PHASE EXECUTE] Executing apply_multi_file_patch")
+		log.Debug("[PHASE EXECUTE] Executing apply_multi_file_patch")
 		return p.runApplyMultiFilePatch(ctx, args)
 	default:
 		log.Error("[PHASE EXECUTE] Unsupported tool",
@@ -588,10 +727,49 @@ func (p *CodingPhase) runSearchRepo(ctx context.Context, args map[string]any) (s
 		return "", fmt.Errorf("search repo: %w", err)
 	}
 
-	if len(results) == 0 {
-		return "Search Results: none", nil
+	output := "Search Results: none"
+	if len(results) > 0 {
+		output = fmt.Sprintf("Search Results:\n%s", strings.Join(results, "\n"))
 	}
-	return fmt.Sprintf("Search Results:\n%s", strings.Join(results, "\n")), nil
+	if history := p.recordAndFormatSearchHistory(searchQuery); history != "" {
+		output += "\n\n" + history
+	}
+	return output, nil
+}
+
+// searchHistoryMemoryKey scopes prior search queries to this phase so repeated
+// searches in the same execution can be flagged instead of silently repeating.
+func (p *CodingPhase) searchHistoryMemoryKey() string {
+	return "search-repo-history:" + p.phaseID
+}
+
+// recordAndFormatSearchHistory persists the just-run search query and warns when
+// three or more searches have run in this phase without reaching a patch, since
+// that pattern burns the tool budget on exploration instead of converging on a fix.
+func (p *CodingPhase) recordAndFormatSearchHistory(searchQuery string) string {
+	infra := p.ensureSharedInfrastructure()
+	if infra.Memory == nil {
+		return ""
+	}
+
+	key := p.searchHistoryMemoryKey()
+	var queries []string
+	if stored, err := infra.Memory.Load(key); err == nil {
+		if raw, ok := stored["queries_json"]; ok && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &queries)
+		}
+	}
+
+	queries = append(queries, searchQuery)
+
+	if encoded, err := json.Marshal(queries); err == nil {
+		_ = infra.Memory.Save(key, map[string]string{"queries_json": string(encoded)})
+	}
+
+	if len(queries) < 3 {
+		return ""
+	}
+	return fmt.Sprintf("This phase has already run %d searches this turn cycle: %s. If the target symbol/line is known, stop searching and generate the patch now.", len(queries), strings.Join(queries, " | "))
 }
 
 func (p *CodingPhase) runListChangedFiles(ctx context.Context, args map[string]any) (string, error) {
@@ -650,13 +828,10 @@ func (p *CodingPhase) runReadFile(ctx context.Context, args map[string]any) (str
 		filePath = filepath.Join(pathParts[stripCount:]...)
 	}
 
-	// Build absolute path
-	var absPath string
-	if filepath.IsAbs(filePath) {
-		absPath = filePath
-	} else {
-		absPath = filepath.Join(task.WorkingDir, filePath)
-	}
+	// Build absolute path. For bare filenames, prefer the active file's
+	// directory first so sibling files like auth.go/auth_test.go resolve there
+	// before falling back to the repo root join.
+	absPath := resolveReadFilePath(task, filePath)
 
 	// Read entire file
 	content, err := os.ReadFile(absPath)
@@ -715,7 +890,201 @@ func (p *CodingPhase) runReadFile(ctx context.Context, args map[string]any) (str
 		result.WriteString(fmt.Sprintf("\n(File continues to line %d. Use read_file with end_line=%d to see more)\n", totalLines, totalLines))
 	}
 
+	if history := p.recordAndFormatReadHistory(filePath, startLine, endLine); history != "" {
+		result.WriteString("\n")
+		result.WriteString(history)
+	}
+
 	return result.String(), nil
+}
+
+// readHistoryMemoryKey scopes already-read line ranges to this phase so later turns
+// in the same execution can see what was covered instead of re-reading from scratch.
+func (p *CodingPhase) readHistoryMemoryKey() string {
+	return "read-file-history:" + p.phaseID
+}
+
+// recordAndFormatReadHistory persists the just-read range (system-tracked, not
+// dependent on the model remembering to report it) and returns a summary of every
+// range read so far for this file in this phase, so the model can see gaps instead
+// of paging sequentially through a large file.
+func (p *CodingPhase) recordAndFormatReadHistory(filePath string, startLine, endLine int) string {
+	infra := p.ensureSharedInfrastructure()
+	if infra.Memory == nil {
+		return ""
+	}
+
+	key := p.readHistoryMemoryKey()
+	history := map[string][]string{}
+	if stored, err := infra.Memory.Load(key); err == nil {
+		if raw, ok := stored["history_json"]; ok && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &history)
+		}
+	}
+
+	history[filePath] = append(history[filePath], fmt.Sprintf("%d-%d", startLine, endLine))
+
+	if encoded, err := json.Marshal(history); err == nil {
+		_ = infra.Memory.Save(key, map[string]string{"history_json": string(encoded)})
+	}
+
+	ranges, ok := history[filePath]
+	if !ok || len(ranges) <= 1 {
+		return ""
+	}
+	return fmt.Sprintf("Already read in %s this phase: lines %s. Do not re-read these ranges; use search_repo to jump to the remaining symbol/lines.", filePath, strings.Join(ranges, ", "))
+}
+
+func (p *CodingPhase) runListDirectory(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
+	task, _ = cw.ResolveRepoWorkingDir(ctx, task)
+
+	dirPath := readPhaseString(args, "path", "")
+	maxItems := 200
+	if raw, ok := args["max_items"]; ok {
+		switch v := raw.(type) {
+		case int:
+			maxItems = v
+		case float64:
+			maxItems = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				maxItems = int(parsed)
+			}
+		}
+	}
+	if maxItems <= 0 {
+		maxItems = 200
+	}
+	resolvedPath := resolveListDirectoryPath(task, dirPath)
+	if resolvedPath == "" {
+		return "", fmt.Errorf("list directory: empty path")
+	}
+
+	entries, err := os.ReadDir(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("list directory %s: %w", dirPath, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	truncated := len(names) > maxItems
+	if truncated {
+		names = names[:maxItems]
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Directory contents for %s (%d item(s) shown)\n", resolvedPath, len(names)))
+	for _, name := range names {
+		result.WriteString(fmt.Sprintf("- %s\n", name))
+	}
+	if truncated {
+		result.WriteString(fmt.Sprintf("\n(Output truncated at %d items. Use a narrower path or inspect subdirectories.)\n", maxItems))
+	}
+
+	return strings.TrimSpace(result.String()), nil
+}
+
+func stripRepeatedWorkspacePrefix(workingDir, candidate string) string {
+	workingDir = filepath.Clean(strings.TrimSpace(workingDir))
+	candidate = strings.TrimSpace(candidate)
+	if workingDir == "" || candidate == "" {
+		return candidate
+	}
+	if filepath.IsAbs(candidate) {
+		return candidate
+	}
+
+	workingParts := splitPathParts(workingDir)
+	candidateParts := splitPathParts(candidate)
+	if len(workingParts) == 0 || len(candidateParts) == 0 {
+		return candidate
+	}
+
+	maxMatch := min(len(workingParts), len(candidateParts))
+	for i := maxMatch; i > 0; i-- {
+		matched := true
+		for j := 0; j < i; j++ {
+			if workingParts[len(workingParts)-i+j] != candidateParts[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			if i == len(candidateParts) {
+				return "."
+			}
+			return filepath.Join(candidateParts[i:]...)
+		}
+	}
+	return candidate
+}
+
+func splitPathParts(value string) []string {
+	cleaned := filepath.Clean(strings.TrimSpace(value))
+	if cleaned == "." || cleaned == string(filepath.Separator) {
+		return nil
+	}
+	parts := strings.Split(cleaned, string(filepath.Separator))
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" && part != "." {
+			filtered = append(filtered, part)
+		}
+	}
+	return filtered
+}
+
+func resolveReadFilePath(task cw.Task, filePath string) string {
+	trimmed := strings.TrimSpace(filePath)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+
+	candidatePath := stripRepeatedWorkspacePrefix(task.WorkingDir, trimmed)
+	if !strings.Contains(candidatePath, string(filepath.Separator)) && strings.TrimSpace(task.ActiveFile) != "" {
+		activeDir := filepath.Dir(strings.TrimSpace(task.ActiveFile))
+		if activeDir != "" && activeDir != "." {
+			activeDir = stripRepeatedWorkspacePrefix(task.WorkingDir, activeDir)
+			candidate := filepath.Clean(filepath.Join(task.WorkingDir, activeDir, candidatePath))
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+
+	if task.WorkingDir != "" {
+		return filepath.Clean(filepath.Join(task.WorkingDir, candidatePath))
+	}
+	return filepath.Clean(candidatePath)
+}
+
+func resolveListDirectoryPath(task cw.Task, dirPath string) string {
+	trimmed := strings.TrimSpace(dirPath)
+	if trimmed == "" || trimmed == "." {
+		if strings.TrimSpace(task.WorkingDir) != "" {
+			return filepath.Clean(task.WorkingDir)
+		}
+		return "."
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	trimmed = stripRepeatedWorkspacePrefix(task.WorkingDir, trimmed)
+	if strings.TrimSpace(task.WorkingDir) != "" {
+		return filepath.Clean(filepath.Join(task.WorkingDir, trimmed))
+	}
+	return filepath.Clean(trimmed)
 }
 
 func (p *CodingPhase) runIndexRepoStructure(ctx context.Context, args map[string]any) (string, error) {
@@ -989,15 +1358,16 @@ func (p *CodingPhase) runPreviewPatch(ctx context.Context, args map[string]any) 
 	if structData, ok := args["structured_data"].(map[string]any); ok {
 		diagnosisData = structData
 	}
-	if diagnosisData == nil {
-		artifact, err := p.loadExistingArtifact()
-		if err == nil && artifact.StructuredData != nil {
+	var topLevelEvidence []string
+	if artifact, err := p.loadExistingArtifact(); err == nil {
+		topLevelEvidence = artifact.Evidence
+		if diagnosisData == nil && artifact.StructuredData != nil {
 			diagnosisData = artifact.StructuredData
 		}
 	}
 
 	if isRepairTaskForDiagnosis(task.Description, nil, nil) {
-		if missing := diagnosisFieldsMissing(diagnosisData); len(missing) > 0 {
+		if missing := diagnosisFieldsMissing(diagnosisData, topLevelEvidence); len(missing) > 0 {
 			message := fmt.Sprintf("DIAGNOSIS REQUIRED\nRepair task detected: %s\nMissing diagnosis fields: %s\nAdd structured_data.diagnosis with root_cause, evidence, fix_target, shared_with, and blast_radius before previewing the patch.",
 				task.Description,
 				strings.Join(missing, ", "))

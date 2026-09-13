@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 )
 
@@ -317,6 +318,152 @@ func TestEvaluatePhaseTransactionCognitiveDecision_RequeuesExecutionWhenValidati
 	}
 	if payload.CognitiveState.LastAssessment.SuggestedPhase != "execution" {
 		t.Fatalf("expected cognitive suggested phase execution, got %#v", payload.CognitiveState.LastAssessment)
+	}
+}
+
+func TestEvaluatePhaseTransactionCognitiveDecision_IncludesConcretePatchTargetsAfterDiagnosis(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	memory := NewShortTermMemory()
+	thread := &ConversationThread{
+		ID: sop.NewUUID(),
+		StreamContext: &WorkStreamContext{
+			PhaseArtifacts: map[string]map[string]any{
+				"execution": {
+					"summary":  "repair auth mismatch",
+					"evidence": []any{"auth cluster failures", "AuthenticateUser mismatch"},
+					"structured_data": map[string]any{
+						"root_cause": "AuthenticateUser rejects valid credentials",
+						"fix_target": map[string]any{
+							"focus_symbol":        "AuthenticateUser",
+							"primary":             []any{"tools/sopbackend/auth.go"},
+							"secondary_if_needed": []any{"tools/sopbackend/auth_test.go"},
+						},
+						"shared_with":  []any{"active execution context"},
+						"blast_radius": map[string]any{"scope": "local to tools/sopbackend"},
+					},
+				},
+			},
+		},
+	}
+	memory.AddThread(thread)
+	ag.service = &Service{session: &RunnerSession{Memory: memory}}
+	artifact := `{"summary":"repair auth mismatch","evidence":["auth cluster failures","AuthenticateUser mismatch"],"structured_data":{"root_cause":"AuthenticateUser rejects valid credentials","fix_target":{"focus_symbol":"AuthenticateUser","primary":["tools/sopbackend/auth.go"],"secondary_if_needed":["tools/sopbackend/auth_test.go"]},"shared_with":["active execution context"],"blast_radius":{"scope":"local to tools/sopbackend"}}}`
+	if err := memory.SaveWorkflowMemory("phase-artifact:execution", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed execution artifact: %v", err)
+	}
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedObjective,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		ExecutionReady:     true,
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_read_file"}}, []string{"read implementation"}, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected diagnosis-complete execution to requeue execution for patch generation")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected next phase execution, got %q", decision.NextPhase)
+	}
+	if !strings.Contains(decision.DirectQuery, "execution_preview_patch") {
+		t.Fatalf("expected direct query to mention execution_preview_patch, got %q", decision.DirectQuery)
+	}
+	if !strings.Contains(decision.DirectQuery, "execution_apply_patch") {
+		t.Fatalf("expected direct query to mention execution_apply_patch, got %q", decision.DirectQuery)
+	}
+	if !strings.Contains(decision.DirectQuery, "execution_run_tests") {
+		t.Fatalf("expected direct query to mention execution_run_tests, got %q", decision.DirectQuery)
+	}
+	if !strings.Contains(decision.DirectQuery, "tools/sopbackend/auth.go") {
+		t.Fatalf("expected direct query to include the concrete fix target, got %q", decision.DirectQuery)
+	}
+	if !strings.Contains(decision.DirectQuery, "AuthenticateUser") {
+		t.Fatalf("expected direct query to include the focus symbol, got %q", decision.DirectQuery)
+	}
+	// Both execution_read_file and execution_search_repo must remain permitted post-diagnosis:
+	// the diagnosis often lacks an exact line number, so search_repo may still be needed once
+	// to locate it, and read_file is needed once to fetch exact content for old_content.
+	if !strings.Contains(decision.DirectQuery, "execution_search_repo") {
+		t.Fatalf("expected direct query to keep execution_search_repo available, got %q", decision.DirectQuery)
+	}
+	if !strings.Contains(decision.DirectQuery, "execution_read_file") {
+		t.Fatalf("expected direct query to keep execution_read_file available, got %q", decision.DirectQuery)
+	}
+}
+
+// TestEvaluatePhaseTransactionCognitiveDecision_StopsRequeuingAfterRepeatedDiagnosisWithoutPatch
+// reproduces a stall seen in production: the model captured a complete diagnosis, was told to
+// patch, but on the NEXT execution turn re-diagnosed again (e.g. because its hypothesis was
+// wrong once it actually read the file) without ever calling apply_patch. Requeuing execution
+// yet again just repeats the same wasted search/read/capture cycle, so once this has already
+// happened on a prior turn (PhaseIterations["execution"] >= 2), the decision should stop
+// auto-requeuing instead of trying indefinitely.
+func TestEvaluatePhaseTransactionCognitiveDecision_StopsRequeuingAfterRepeatedDiagnosisWithoutPatch(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	memory := NewShortTermMemory()
+	thread := &ConversationThread{
+		ID: sop.NewUUID(),
+		StreamContext: &WorkStreamContext{
+			PhaseIterations: map[string]int{"execution": 2},
+		},
+	}
+	memory.AddThread(thread)
+	ag.service = &Service{session: &RunnerSession{Memory: memory}}
+	artifact := `{"summary":"repair auth mismatch","evidence":["auth cluster failures"],"structured_data":{"root_cause":"wrong hypothesis","fix_target":{"focus_symbol":"AuthenticateUser","primary":["tools/sopbackend/auth.go"]},"shared_with":["active execution context"],"blast_radius":{"scope":"local to tools/sopbackend"}}}`
+	if err := memory.SaveWorkflowMemory("phase-artifact:execution", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed execution artifact: %v", err)
+	}
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedObjective,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		ExecutionReady:     true,
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_read_file"}}, []string{"read implementation"}, "", nil)
+	if decision.EnqueueNextPhase {
+		t.Fatalf("expected repeated re-diagnosis without a patch to stop auto-requeuing, got %#v", decision)
+	}
+}
+
+func TestEvaluatePhaseTransactionCognitiveDecision_UsesInvestigationFailuresToTriggerExecutionPatchGuidance(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	memory := NewShortTermMemory()
+	thread := &ConversationThread{
+		ID: sop.NewUUID(),
+		StreamContext: &WorkStreamContext{
+			PhaseArtifacts: map[string]map[string]any{
+				"investigation": {
+					"summary":  "failing authentication test cluster",
+					"evidence": []any{"--- FAIL: TestAuthenticateUser_ValidCredentials", "auth.go read"},
+				},
+				"execution": {},
+			},
+		},
+	}
+	memory.AddThread(thread)
+	ag.service = &Service{session: &RunnerSession{Memory: memory}}
+
+	guidance := ag.buildExecutionGuidanceFromState("execution", thread.StreamContext, []ai.ToolCall{{Name: "execution_read_file"}})
+	if !strings.Contains(guidance, "execution_preview_patch") {
+		t.Fatalf("expected execution guidance to move from investigation evidence to patch generation, got %q", guidance)
+	}
+	if !strings.Contains(guidance, "execution_apply_patch") {
+		t.Fatalf("expected execution guidance to include apply patch, got %q", guidance)
 	}
 }
 

@@ -318,7 +318,7 @@ func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeK
 	// Smart, context-aware recommendation instead of generic menu
 	sb.WriteString("\n---\n")
 	sb.WriteString(fmt.Sprintf("Full output: %s (%.1fKB)\n", filePath, sizeKB))
-	
+
 	recommendation := s.getSmartRecommendation(toolName, head, filePath, sizeKB)
 	if recommendation != "" {
 		sb.WriteString(recommendation)
@@ -330,7 +330,7 @@ func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeK
 // getSmartRecommendation provides context-aware next action based on tool and content
 func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath string, sizeKB float64) string {
 	lower := strings.ToLower(preview)
-	
+
 	// Repo inspection tools with massive output
 	if toolName == "inspect_repo" || toolName == "list_changed_files" {
 		if sizeKB > 100 {
@@ -339,12 +339,12 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return fmt.Sprintf("Review changed files in the preview above, then read specific files with read_file.\n")
 	}
-	
+
 	// Git log - usually want to find specific commits
 	if strings.Contains(toolName, "git_log") {
 		return fmt.Sprintf("To find specific commits: grep_tool_result(file_path=\"%s\", pattern=\"your-search-term\")\n", filePath)
 	}
-	
+
 	// Git diff - errors or specific changes
 	if strings.Contains(toolName, "git_diff") || strings.Contains(toolName, "git_status") {
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") {
@@ -352,7 +352,7 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return "Review the changes shown above. To see specific sections: read_tool_result with line ranges.\n"
 	}
-	
+
 	// Build/compilation output - look for errors
 	if strings.Contains(toolName, "build") || strings.Contains(toolName, "compile") {
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") {
@@ -360,7 +360,7 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return "Build output captured. Review preview above for any warnings or errors.\n"
 	}
-	
+
 	// Directory listings
 	if strings.Contains(toolName, "list_directory") || strings.Contains(toolName, "ls") {
 		lineCount := strings.Count(preview, "\n")
@@ -369,7 +369,7 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return "Directory contents shown above.\n"
 	}
-	
+
 	// Search results
 	if strings.Contains(toolName, "search") || strings.Contains(toolName, "grep") || strings.Contains(toolName, "find") {
 		matchCount := strings.Count(preview, "\n")
@@ -381,7 +381,7 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return fmt.Sprintf("Found %d match(es). Review results above.\n", matchCount)
 	}
-	
+
 	// Command execution output
 	if strings.Contains(toolName, "execute") || strings.Contains(toolName, "command") {
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "fail") {
@@ -389,12 +389,12 @@ func (s *ToolResultStorage) getSmartRecommendation(toolName, preview, filePath s
 		}
 		return "Command output captured. Review the preview above for results.\n"
 	}
-	
+
 	// Generic fallback - but still only ONE recommendation, not six
 	if sizeKB > 50 {
 		return fmt.Sprintf("Large output (%.0fKB). To analyze: grep_tool_result(file_path=\"%s\", pattern=\"your-search-term\")\n", sizeKB, filePath)
 	}
-	
+
 	return fmt.Sprintf("Output saved. To analyze: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\") or read_tool_result for specific lines.\n", filePath)
 }
 
@@ -766,6 +766,76 @@ func (s *ToolResultStorage) ReadResultLines(filePath string, startLine, endLine 
 
 	selectedLines := lines[startIdx:endIdx]
 	return strings.Join(selectedLines, "\n"), nil
+}
+
+// ReadResultPage reads a page of lines from a stored result file.
+// Page numbering is 1-based and page_size controls the number of lines per page.
+func (s *ToolResultStorage) ReadResultPage(filePath string, page, pageSize int) (string, error) {
+	resolvedPath, err := s.resolveStoredResultPath(filePath)
+	if err != nil {
+		return "", err
+	}
+	if resolvedPath == "" {
+		return "", nil
+	}
+
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read result file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	totalLines := len(lines)
+	if totalLines == 1 && lines[0] == "" {
+		return fmt.Sprintf("[Page 1 of 1 | lines 0-0 of 0 from %s]\n\n(empty result file)", filepath.Base(resolvedPath)), nil
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
+	totalPages := (totalLines + pageSize - 1) / pageSize
+	if totalPages <= 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	startLine := (page-1)*pageSize + 1
+	endLine := startLine + pageSize - 1
+	if endLine > totalLines {
+		endLine = totalLines
+	}
+	if startLine > totalLines {
+		startLine = totalLines
+	}
+
+	startIdx := startLine - 1
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := endLine
+	if endIdx < startIdx {
+		endIdx = startIdx
+	}
+	selectedLines := lines[startIdx:endIdx]
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[Page %d of %d | lines %d-%d of %d from %s]\n\n", page, totalPages, startLine, endLine, totalLines, filepath.Base(resolvedPath)))
+	sb.WriteString(strings.Join(selectedLines, "\n"))
+	if page < totalPages {
+		sb.WriteString(fmt.Sprintf("\n\n(Use read_tool_result_page(file_path=\"%s\", page=%d, page_size=%d) for the next page)\n", filePath, page+1, pageSize))
+	}
+	if page > 1 {
+		sb.WriteString(fmt.Sprintf("(Use read_tool_result_page(file_path=\"%s\", page=%d, page_size=%d) for the previous page)\n", filePath, page-1, pageSize))
+	}
+	return sb.String(), nil
 }
 
 // GrepResult searches for a pattern in a stored result file

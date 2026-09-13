@@ -104,6 +104,25 @@ func TestDefaultContextManager_BuildContext_ResumesFromStateMetadata(t *testing.
 	}
 }
 
+func TestDetectProjectTypeFromDir_FindsPackageJsonInParentDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	projectRoot := filepath.Join(tempDir, "workspace")
+	childDir := filepath.Join(projectRoot, "lib", "sop")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("mkdir child dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "package.json"), []byte(`{"name":"demo-workspace"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	if got := detectProjectTypeFromDir(childDir); got != ProjectTypeNode {
+		t.Fatalf("expected child directory to resolve as node project, got %v", got)
+	}
+	if got := inferModuleName(childDir); got != "demo-workspace" {
+		t.Fatalf("expected package name from parent package.json, got %q", got)
+	}
+}
+
 func TestClassifyTaskType_AndInferTaskInputs_HandleModeAndPathTokens(t *testing.T) {
 	state := RunState{Metadata: map[string]string{"mode": "planning"}}
 	if got := classifyTaskType(Task{Description: "implement the new store API"}, state, ""); got != "code" {

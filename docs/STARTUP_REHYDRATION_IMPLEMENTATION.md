@@ -189,6 +189,7 @@ if a.service != nil && a.service.session != nil && a.service.session.Memory != n
 - Configurable TTL per workspace
 - "Archive" state for 7-30 days (read-only)
 - Smart suggestions: "You paused this 28 days ago, abandon it?"
+- TODO: When ship-quality UX is ready, prompt the user on restart to explicitly resume or abandon/trash a paused workstream before starting a new "fix failing tests" request.
 
 ### Multi-Session Awareness
 **Current:** Single session per daemon  

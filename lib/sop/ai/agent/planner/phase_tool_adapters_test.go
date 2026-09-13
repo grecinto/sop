@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 func TestPlannerAcceptsAllDomains(t *testing.T) {
@@ -386,6 +387,116 @@ func TestPhaseCapabilityUsesCorrectAdapter(t *testing.T) {
 					tc.phaseID, tc.domain, tc.expectedTool, toolNames(tools))
 			}
 		})
+	}
+}
+
+func TestCodingPhaseExecutionHidesInvestigationToolsAfterDiagnosisCaptured(t *testing.T) {
+	phaseArtifacts := map[string]map[string]any{
+		"execution": {
+			"structured_data": map[string]any{
+				"diagnosis": map[string]any{
+					"root_cause":   "auth setup mismatch",
+					"evidence":     []any{"targeted test failure", "auth.go read"},
+					"fix_target":   map[string]any{"focus_symbol": "AuthenticateUser"},
+					"shared_with":  []any{"active execution context"},
+					"blast_radius": map[string]any{"scope": "local to tools/sopbackend"},
+				},
+			},
+		},
+	}
+	phase := newCodingPhase("execution", &cw.SharedInfrastructure{STMAccessor: func() cw.STMReader {
+		return &phaseSTMReader{thread: &phaseWorkStreamReader{ctx: &phaseWorkStreamContext{phaseArtifacts: phaseArtifacts}}}
+	}})
+
+	tools := phase.ExposeTools()
+	toolSet := toolNames(tools)
+
+	for _, forbidden := range []string{
+		"execution_build_context",
+		"execution_inspect_repo",
+		"execution_list_changed_files",
+		"execution_index_repo_structure",
+		"execution_compile_artifact_inventory",
+		"execution_select_inventory_item",
+		"execution_complete_inventory_item",
+		"execution_list_directory",
+	} {
+		if containsStringInTest(toolSet, forbidden) {
+			t.Fatalf("expected diagnosis-complete execution to hide %s, got %v", forbidden, toolSet)
+		}
+	}
+
+	// read_file and search_repo must stay exposed: patch generation needs exact current file
+	// content for old_content, and the diagnosis often lacks an exact line number, so hiding
+	// search_repo too would leave the model with no way to locate the fix_target region.
+	for _, required := range []string{"execution_read_file", "execution_search_repo", "execution_run_tests", "execution_preview_patch", "execution_apply_patch", "execution_apply_multi_file_patch"} {
+		if !containsStringInTest(toolSet, required) {
+			t.Fatalf("expected diagnosis-complete execution to expose %s, got %v", required, toolSet)
+		}
+	}
+}
+
+// TestCodingPhaseExecutionHidesInvestigationToolsUsingRealCapturedArtifact reproduces the
+// production storage path: runCapture persists via SharedInfrastructure.Memory under
+// "phase-artifact:<phaseID>", not WorkStreamContext.PhaseArtifacts. shouldExposeInvestigationTools
+// must consult that same store, or it always sees an empty artifact and never hides these tools.
+func TestCodingPhaseExecutionHidesInvestigationToolsUsingRealCapturedArtifact(t *testing.T) {
+	infra := &cw.SharedInfrastructure{Memory: cw.NewInMemorySessionMemory()}
+	phase := newCodingPhase("execution", infra)
+
+	if _, err := phase.runCapture(map[string]any{
+		"summary":  "repair auth mismatch",
+		"status":   "exploring",
+		"evidence": []any{"targeted test failure", "auth.go read"},
+		"structured_data": map[string]any{
+			"root_cause":   "auth setup mismatch",
+			"fix_target":   map[string]any{"focus_symbol": "AuthenticateUser"},
+			"shared_with":  []any{"active execution context"},
+			"blast_radius": map[string]any{"scope": "local to tools/sopbackend"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to capture diagnosis artifact: %v", err)
+	}
+
+	tools := phase.ExposeTools()
+	toolSet := toolNames(tools)
+	if containsStringInTest(toolSet, "execution_list_directory") {
+		t.Fatalf("expected diagnosis-complete execution (via real capture path) to hide execution_list_directory, got %v", toolSet)
+	}
+	// read_file and search_repo must stay exposed even via the real capture path: patch
+	// generation needs read_file for exact content, and search_repo may still be needed once
+	// to locate the fix_target line when the diagnosis doesn't include it.
+	for _, required := range []string{"execution_read_file", "execution_search_repo", "execution_run_tests", "execution_preview_patch", "execution_apply_patch"} {
+		if !containsStringInTest(toolSet, required) {
+			t.Fatalf("expected diagnosis-complete execution to expose %s, got %v", required, toolSet)
+		}
+	}
+}
+
+func TestCodingPhaseExecutionHidesWholeRepoScanToolsEvenBeforeDiagnosis(t *testing.T) {
+	phase := newCodingPhase("execution", &cw.SharedInfrastructure{})
+
+	tools := phase.ExposeTools()
+	toolSet := toolNames(tools)
+
+	for _, forbidden := range []string{
+		"execution_build_context",
+		"execution_inspect_repo",
+		"execution_list_changed_files",
+		"execution_index_repo_structure",
+		"execution_compile_artifact_inventory",
+		"execution_select_inventory_item",
+		"execution_complete_inventory_item",
+	} {
+		if containsStringInTest(toolSet, forbidden) {
+			t.Fatalf("expected execution phase to never expose whole-repo scan tool %s, got %v", forbidden, toolSet)
+		}
+	}
+
+	for _, required := range []string{"execution_read_file", "execution_list_directory", "execution_search_repo", "execution_run_tests", "execution_preview_patch", "execution_apply_patch"} {
+		if !containsStringInTest(toolSet, required) {
+			t.Fatalf("expected execution phase to expose narrow tool %s before diagnosis, got %v", required, toolSet)
+		}
 	}
 }
 

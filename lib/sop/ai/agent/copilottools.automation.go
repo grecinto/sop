@@ -409,6 +409,7 @@ const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string
 // Phase 2.3: Tool Result Analysis
 const listToolResultsArgsSchema = `{"type":"object","properties":{}}`
 const readToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"start_line":{"type":"integer","description":"Starting line number (1-indexed)."},"end_line":{"type":"integer","description":"Ending line number (inclusive)."}},"required":["file_path"]}`
+const readToolResultPageArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"page":{"type":"integer","description":"Page number to read (1-indexed)."},"page_size":{"type":"integer","description":"Lines per page."}},"required":["file_path"]}`
 const grepToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"pattern":{"type":"string","description":"Case-insensitive text or regex pattern to search for within the file. Supports alternation such as FAIL|Error|panic."},"max_matches":{"type":"integer","description":"Maximum number of matching lines to return (default: 100)."}},"required":["file_path","pattern"]}`
 const analyzeToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"operation":{"type":"string","description":"Analysis operation to run: grep, awk, sed, head, tail, wc, or cat."},"pattern":{"type":"string","description":"Text pattern to search for when using grep or awk."},"start_line":{"type":"integer","description":"First line number to include for sed operations (1-indexed)."},"end_line":{"type":"integer","description":"Last line number to include for sed operations (inclusive)."},"max_matches":{"type":"integer","description":"Maximum number of lines to return for grep/awk/head/tail operations."}},"required":["file_path","operation"]}`
 
@@ -477,6 +478,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		// Phase 2.3: Tool Result Analysis - efficiently process large tool outputs
 		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output, it's stored to a file for follow-up analysis. Use this to see what result files are available.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
 		a.registry.Register("read_tool_result", "Reads a specific line range from a stored tool result file. Use this after identifying line numbers with grep_tool_result, or to view specific sections of large test/build outputs.", readToolResultArgsSchema, wrapStringTool(a.toolReadToolResult))
+		a.registry.Register("read_tool_result_page", "Reads a page of lines from a stored tool result file. Use this to inspect large outputs incrementally, especially after grep_tool_result narrows the region of interest.", readToolResultPageArgsSchema, wrapStringTool(a.toolReadToolResultPage))
 		a.registry.Register("grep_tool_result", "Searches for a case-insensitive text or regex pattern within a stored tool result file and returns matching lines with line numbers. Supports alternation patterns like FAIL|Error|panic to find failures in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
 		a.registry.Register("analyze_tool_result", "Analyzes a stored tool result file using a lightweight operation such as grep, awk, sed, head, tail, wc, or cat. This is the preferred path for targeted inspection when the LLM wants a slice of the output without forcing the full temp file into context.", analyzeToolResultArgsSchema, wrapStringTool(a.toolAnalyzeToolResult))
 
@@ -1309,7 +1311,7 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 				cmd += " --short"
 			}
 			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
-			
+
 			changes, err := client.Status(path, repo.StatusOptions{Short: short})
 			if err != nil {
 				return "", err
@@ -1343,7 +1345,7 @@ func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (st
 				cmd += " --staged"
 			}
 			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
-			
+
 			diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
 			if err != nil {
 				return "", err
@@ -1384,7 +1386,7 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 		if client, err := repo.NewClientForPath(path); err == nil {
 			// Emit terminal command for visibility
 			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s log --oneline -n %d", shellQuote(path), count))
-			
+
 			commits, err := client.Log(path, repo.LogOptions{MaxCount: count})
 			if err != nil {
 				return "", err
@@ -1410,7 +1412,7 @@ func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (
 		if client, err := repo.NewClientForPath(path); err == nil {
 			// Emit terminal command for visibility
 			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s branch --all", shellQuote(path)))
-			
+
 			branches, err := client.Branches(path)
 			if err != nil {
 				return "", err
@@ -1444,7 +1446,7 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 		if client, err := repo.NewClientForPath(path); err == nil {
 			// Emit terminal command for visibility
 			emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s checkout %s", shellQuote(path), shellQuote(ref)))
-			
+
 			if err := client.Checkout(path, ref); err != nil {
 				return "", err
 			}
@@ -1488,7 +1490,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 					all = value
 				}
 			}
-			
+
 			// Emit terminal command for visibility
 			if len(files) > 0 {
 				filesList = strings.Join(files, " ")
@@ -1501,7 +1503,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s commit -m %s",
 					shellQuote(path), shellQuote(message)))
 			}
-			
+
 			if err := client.Commit(path, message, repo.CommitOptions{Files: files, All: all}); err != nil {
 				return "", err
 			}
@@ -1552,7 +1554,7 @@ func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (st
 			} else {
 				emitTerminalCommand(ctx, fmt.Sprintf("$ git --no-pager -C %s pull", shellQuote(path)))
 			}
-			
+
 			if err := client.Pull(path, repo.PullOptions{Rebase: rebase}); err != nil {
 				return "", err
 			}
@@ -1589,7 +1591,7 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 				cmd += " " + shellQuote(branch)
 			}
 			emitTerminalCommand(ctx, fmt.Sprintf("$ %s", cmd))
-			
+
 			if err := client.Push(path, repo.PushOptions{Remote: remote, Branch: branch}); err != nil {
 				return "", err
 			}
@@ -1631,7 +1633,7 @@ func (a *CopilotAgent) toolListToolResults(ctx context.Context, args map[string]
 		sb.WriteString(fmt.Sprintf("   Time: %s\n\n", result.Timestamp.Format("2006-01-02 15:04:05")))
 	}
 
-	sb.WriteString("Use read_tool_result() or grep_tool_result() to analyze these files.\n")
+	sb.WriteString("Use read_tool_result(), read_tool_result_page(), or grep_tool_result() to analyze these files.\n")
 	return sb.String(), nil
 }
 
@@ -1690,6 +1692,56 @@ func (a *CopilotAgent) toolReadToolResult(ctx context.Context, args map[string]a
 		result += "\n\n" + guidance
 	}
 	return result, nil
+}
+
+func (a *CopilotAgent) toolReadToolResultPage(ctx context.Context, args map[string]any) (string, error) {
+	filePathRaw, ok := args["file_path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'file_path'")
+	}
+	filePath, ok := filePathRaw.(string)
+	if !ok || strings.TrimSpace(filePath) == "" {
+		return "", fmt.Errorf("'file_path' must be a non-empty string")
+	}
+
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return "", fmt.Errorf("no tool result storage available")
+	}
+
+	page := 1
+	if pageRaw, ok := args["page"]; ok {
+		switch v := pageRaw.(type) {
+		case int:
+			page = v
+		case float64:
+			page = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				page = int(parsed)
+			}
+		}
+	}
+
+	pageSize := 100
+	if pageSizeRaw, ok := args["page_size"]; ok {
+		switch v := pageSizeRaw.(type) {
+		case int:
+			pageSize = v
+		case float64:
+			pageSize = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				pageSize = int(parsed)
+			}
+		}
+	}
+
+	content, err := storage.ReadResultPage(filePath, page, pageSize)
+	if err != nil {
+		return "", fmt.Errorf("failed to read tool result page: %w", err)
+	}
+	return content, nil
 }
 
 func buildFailureFollowupGuidance(content string) string {

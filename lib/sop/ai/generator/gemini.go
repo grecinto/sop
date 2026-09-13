@@ -210,6 +210,12 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		if strings.TrimSpace(turn.Prompt) == "" {
 			turn.Prompt = geminiOwnedLoopPrompt(req)
 		}
+		// Budget-exhaustion nudge: when only one tool-call turn remains, tell the model to
+		// persist findings via capture now instead of spending the last turn on more
+		// investigation that will be discarded when the loop hits its step limit.
+		if retryState.allowedTurns-iteration <= 1 && toolDefinitionsIncludeTool(tools, "capture") {
+			turn.Options.SystemPrompt = appendFinalTurnCaptureNudge(turn.Options.SystemPrompt)
+		}
 		log.Debug("Gemini owned loop calling generator",
 			"iteration", iteration,
 			"tool_count", len(turn.Options.Tools),
@@ -263,6 +269,18 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 				reminder := retryState.reminderResult(toolCall.Name)
 				toolResults = append(toolResults, reminder)
 				continuations = append(continuations, ai.ToolCallContinuation{ToolCall: toolCall, Response: map[string]any{"tool_error": map[string]any{"message": reminder.Result}}})
+				partial := geminiOwnedLoopResponse("", executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+				partial.EscalationState = retryState.escalationState
+				emitGeminiOwnedLoopHydration(req, partial)
+				continue
+			}
+			// Duplicate detection: the same investigation-style tool called with the same
+			// arguments already this owned-loop turn adds no new information.
+			if duplicateCount := countOwnedLoopDuplicateToolCalls(toolResults, toolCall); duplicateCount > 0 && isOwnedLoopDedupCandidateTool(toolCall.Name) {
+				guidance := buildOwnedLoopDuplicateGuidance(toolCall.Name, duplicateCount)
+				duplicateResult := ai.ReActToolResult{Name: toolCall.Name, Args: cloneGeminiToolArgs(toolCall.Args), Result: guidance}
+				toolResults = append(toolResults, duplicateResult)
+				continuations = append(continuations, ai.ToolCallContinuation{ToolCall: toolCall, Response: map[string]any{"tool_result": guidance}})
 				partial := geminiOwnedLoopResponse("", executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
 				partial.EscalationState = retryState.escalationState
 				emitGeminiOwnedLoopHydration(req, partial)

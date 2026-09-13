@@ -113,21 +113,9 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 
 		lastResponse = response
 
-		// Increment phase iteration counter after each phase turn
-		if strings.HasPrefix(item.Actor, "phase:") {
-			phaseName := strings.TrimPrefix(item.Actor, "phase:")
-			if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
-				if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil {
-					if thread.StreamContext.PhaseIterations == nil {
-						thread.StreamContext.PhaseIterations = make(map[string]int)
-					}
-					thread.StreamContext.PhaseIterations[phaseName]++
-					log.Info("Phase iteration incremented",
-						"phase", phaseName,
-						"iteration", thread.StreamContext.PhaseIterations[phaseName])
-				}
-			}
-		}
+		// Note: phase iteration counting happens once per turn inside askCore via
+		// WorkStreamContext.RecordPhaseExecution — do not increment PhaseIterations here too,
+		// or the iteration cap trips after ~1 real turn instead of the intended count.
 
 		// ReAct returns either:
 		// - Completed answer: continue to next queue item
@@ -254,13 +242,30 @@ func phaseTransactionIsStillInvestigating(toolCalls []ai.ToolCall) bool {
 }
 
 func phaseTransactionHasValidationEvidence(toolCalls []ai.ToolCall, outcomeFacts []string, finalText string) bool {
+	ranValidationTool := false
 	for _, toolCall := range toolCalls {
 		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
 		if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") || strings.Contains(name, "validate") || strings.Contains(name, "verify") || strings.Contains(name, "review") {
-			return true
+			ranValidationTool = true
+			break
 		}
 	}
-	for _, candidate := range append(append([]string{}, outcomeFacts...), finalText) {
+	if !ranValidationTool {
+		return false
+	}
+	candidates := append(append([]string{}, outcomeFacts...), finalText)
+	// Failure markers take priority over "tests passed" style substrings: a broad `go test
+	// ./...` run can emit "ok <package>" (containing "passed"-adjacent text) for unrelated
+	// packages in the same output as an overall "TEST STATUS: FAIL", so checking for success
+	// text alone falsely treats a failing run as validation evidence.
+	for _, candidate := range candidates {
+		lower := strings.ToLower(strings.TrimSpace(candidate))
+		if strings.Contains(lower, "test status: fail") || strings.Contains(lower, "--- fail:") || strings.Contains(lower, "--- fail") ||
+			strings.Contains(lower, "tests failed") || strings.Contains(lower, "the test suite failed") || strings.Contains(lower, "panic:") {
+			return false
+		}
+	}
+	for _, candidate := range candidates {
 		lower := strings.ToLower(strings.TrimSpace(candidate))
 		if strings.Contains(lower, "tests passed") || strings.Contains(lower, "validation passed") || strings.Contains(lower, "verified") || strings.Contains(lower, "rerun") || strings.Contains(lower, "ok\t") || strings.Contains(lower, "pass\t") {
 			return true
@@ -285,6 +290,21 @@ func phaseTransactionHasGenericCompletionEvidence(toolCalls []ai.ToolCall, outco
 	return len(toolCalls) > 0 && len(outcomeFacts) > 0
 }
 
+// currentThreadRootPrompt returns the immutable seed prompt that started the current
+// workstream thread, set once at thread creation and never overwritten. This is the reliable
+// source of "what did the user actually ask for", unlike re-deriving it from accumulated
+// turn text.
+func (a *CopilotAgent) currentThreadRootPrompt() string {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return ""
+	}
+	thread := a.service.session.Memory.GetCurrentThread()
+	if thread == nil {
+		return ""
+	}
+	return strings.TrimSpace(thread.RootPrompt)
+}
+
 func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision phaseTransactionDecision) {
 	if a == nil || !decision.EnqueueNextPhase || strings.TrimSpace(decision.NextPhase) == "" {
 		log.Info("Not enqueueing next phase",
@@ -307,13 +327,20 @@ func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision ph
 	if workQuery == "" {
 		workQuery = strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision))
 	}
+	// Prefer the workstream's immutable RootPrompt over re-deriving the original query from
+	// this turn's text, which may already contain prior DirectQuery/guidance text that
+	// extractOriginalRequestQuery cannot reliably strip - that compounds across turns otherwise.
+	originalQuery := a.currentThreadRootPrompt()
+	if originalQuery == "" {
+		originalQuery = extractOriginalRequestQuery(query)
+	}
 	_ = queue.Enqueue(WorkItem{
 		Query:    workQuery,
 		Actor:    targetActor,
 		Priority: PriorityPhaseSuccession,
 		Context: map[string]any{
 			"phase_transaction_continuation": true,
-			"original_query":                 extractOriginalRequestQuery(query),
+			"original_query":                 originalQuery,
 			"controller_guidance":            workQuery,
 			"reason":                         strings.TrimSpace(decision.Reason),
 		},
@@ -327,6 +354,9 @@ func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision ph
 func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Setup and early validation (same as V1)
 	ctx = a.applyAskConfig(ctx, cfg)
+	if ai.GetSessionPayload(ctx) == nil {
+		ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
+	}
 	a.clearAskProgressMRU()
 	ctx = context.WithValue(ctx, "latest_user_query", query)
 

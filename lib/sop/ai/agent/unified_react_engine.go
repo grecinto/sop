@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	log "log/slog"
 	"strings"
@@ -36,6 +37,53 @@ func NewUnifiedReActEngine(adapter ReActLoopAdapter) *UnifiedReActEngine {
 		RetryPolicy: NewDefaultRetryPolicySurface(),
 		MaxTokens:   4096,
 	}
+}
+
+// dedupCandidateToolSubstrings lists read-only, investigation-style tools where an exact
+// repeat (same name, same args) within one turn adds no new information. Mutation and
+// validation tools (apply_patch, run_tests, etc.) are intentionally excluded since re-running
+// them after a change is legitimate.
+var dedupCandidateToolSubstrings = []string{
+	"search_repo", "inspect_repo", "build_context", "index_repo_structure", "list_changed_files", "read_file",
+}
+
+func isDedupCandidateTool(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, candidate := range dedupCandidateToolSubstrings {
+		if strings.Contains(lower, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// toolCallSignature builds a stable name+args signature for duplicate comparison.
+// encoding/json sorts map keys alphabetically, so this is stable across calls.
+func toolCallSignature(toolCall ai.ToolCall) string {
+	argsJSON, _ := json.Marshal(toolCall.Args)
+	return strings.ToLower(strings.TrimSpace(toolCall.Name)) + "|" + string(argsJSON)
+}
+
+// countDuplicateToolCalls returns how many times an identical (name + args) tool call has
+// already been executed earlier in this same Ask/ReAct turn.
+func countDuplicateToolCalls(executed []ai.ToolCall, candidate ai.ToolCall) int {
+	signature := toolCallSignature(candidate)
+	count := 0
+	for _, prior := range executed {
+		if toolCallSignature(prior) == signature {
+			count++
+		}
+	}
+	return count
+}
+
+// buildDuplicateToolCallGuidance nudges the model away from repeating a call and, once it has
+// repeated more than once, tells it explicitly to switch to acting on results already gathered.
+func buildDuplicateToolCallGuidance(toolName string, duplicateCount int) string {
+	if duplicateCount >= 2 {
+		return fmt.Sprintf("DUPLICATE_CALL_DETECTED: %s was already called with these exact arguments %d times this turn. Do not repeat it again - use the information already returned above, or move on to preview_patch/capture with what is already known.", toolName, duplicateCount)
+	}
+	return fmt.Sprintf("DUPLICATE_CALL_DETECTED: %s was already called with these exact arguments earlier this turn. Reuse the prior result instead of repeating the same call.", toolName)
 }
 
 // Run executes the unified ReAct loop.
@@ -242,6 +290,23 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			}
 			state.ToolResults = append(state.ToolResults, reminderResult)
 			state.RepairDirective = reminderDirective
+			continue
+		}
+
+		// Duplicate detection: the same investigation-style tool called with the same
+		// arguments already this turn adds no new information and is a common source of
+		// "ran investigation one too many times" without the outcome improving.
+		if duplicateCount := countDuplicateToolCalls(state.ExecutedToolCalls, toolCall); duplicateCount > 0 && isDedupCandidateTool(toolCall.Name) {
+			log.Warn("Unified ReAct Engine Duplicate Tool Call Detected",
+				"tool", toolCall.Name,
+				"adapter", e.Adapter.Name(),
+				"duplicate_count", duplicateCount)
+			state.ToolResults = append(state.ToolResults, ai.ReActToolResult{
+				Name:   toolCall.Name,
+				Args:   cloneToolEventMap(toolCall.Args),
+				Result: buildDuplicateToolCallGuidance(toolCall.Name, duplicateCount),
+			})
+			state.RepairDirective = ""
 			continue
 		}
 

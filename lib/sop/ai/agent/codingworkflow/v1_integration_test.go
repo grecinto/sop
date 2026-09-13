@@ -3,6 +3,7 @@ package codingworkflow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -112,7 +113,14 @@ func TestFileSearchAdapterFindsRelevantFiles(t *testing.T) {
 		t.Fatal("expected search to return matches")
 	}
 
-	if !contains(matches, "parser.go") {
+	found := false
+	for _, match := range matches {
+		if strings.Contains(match, "parser.go") {
+			found = true
+			break
+		}
+	}
+	if !found {
 		t.Fatalf("expected parser.go in matches, got %v", matches)
 	}
 }

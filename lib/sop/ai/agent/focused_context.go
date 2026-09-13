@@ -113,8 +113,8 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	lines := []string{
 		"EXECUTION PHASE - You are in patch generation mode",
 		"- CRITICAL: Investigation phase is complete. You ALREADY have context about the failures.",
-		"- DO NOT investigate further (no more search_repo, read_file only for generating patches, not exploration).",
-		"- PRIMARY OBJECTIVE: Generate and apply patches using preview_patch then apply_patch.",
+		"- DO NOT investigate further (no more execution_search_repo, execution_read_file only for generating patches, not exploration).",
+		"- PRIMARY OBJECTIVE: Generate and apply patches using execution_preview_patch then execution_apply_patch.",
 		"- Ask objective: complete as much of the active plan as possible in this Ask/ReAct turn before stopping.",
 		"- Stop only for clarification, approval, a real checkpoint, blocked validation, or genuine turn exhaustion.",
 	}
@@ -135,7 +135,7 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	lower := strings.ToLower(strings.TrimSpace(query))
 	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") {
 		lines = append(lines,
-			"- REQUIRED ACTION for test failures: Call preview_patch to generate the fix based on investigation results, then apply_patch, then run_tests to validate.",
+			"- REQUIRED ACTION for test failures: Call execution_preview_patch to generate the fix based on investigation results, then execution_apply_patch, then execution_run_tests to validate.",
 			"- Target specific failing tests, not the entire suite. Minimal patches only.",
 		)
 	}

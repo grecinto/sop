@@ -142,7 +142,13 @@ func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string,
 	}
 
 	// Validate and normalize
-	result.OriginalQuery = query
+	// Prefer the workstream's immutable root prompt over the raw turn text, which may already
+	// contain prior controller guidance/DirectQuery text that accumulates across requeued turns.
+	if rootPrompt := a.currentThreadRootPrompt(); rootPrompt != "" {
+		result.OriginalQuery = rootPrompt
+	} else {
+		result.OriginalQuery = extractOriginalRequestQuery(query)
+	}
 	result = a.normalizeAskTaskContext(result)
 	result = a.applyCognitiveStateContinuity(ctx, result)
 

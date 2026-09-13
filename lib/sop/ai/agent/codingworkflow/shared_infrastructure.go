@@ -329,6 +329,9 @@ func (s *SharedInfrastructure) ensureDefaults() *SharedInfrastructure {
 	if s.Policy == nil {
 		s.Policy = &DefaultSafetyPolicy{}
 	}
+	if s.PatchEngine == nil {
+		s.PatchEngine = &DefaultPatchEngine{}
+	}
 	if s.GrammarRegistry == nil {
 		s.GrammarRegistry = NewGrammarRegistry()
 	}

@@ -96,8 +96,8 @@ func buildCodingExecutionBriefSteps(query, workflowShape string) []ExecutionBrie
 	switch workflowShape {
 	case "checkpointed_fix":
 		return []ExecutionBriefStep{
-			{Title: "Step 1", Phase: "investigation", Description: "Run one broad suite pass only to compile the full initial failure inventory, then choose the first failing package or folder cluster and capture that cluster's current failure output.", ContextInstructions: []string{"Use the broad recursive test command only for the initial failure inventory, not as the default validation loop.", "From that first broad pass, compile the full set of failing packages, folders, or named tests before choosing the active cluster.", "After the initial inventory, prefer the narrowest failing package or test command before reading broader code.", "Capture the concrete failure text for only the active cluster so the next step works from observed behavior instead of memory.", "Do not move to another failing package or folder until this cluster is repaired or explicitly blocked."}, Validation: []string{"initial failure inventory is compiled", "active failing package, folder, or test command is explicit"}},
-			{Title: "Step 2", Phase: "investigation", Description: "Trace the failing code path for the active cluster and form one falsifiable local hypothesis for the failure.", ContextInstructions: []string{"Read the failing test and the nearest implementation path together.", "Name the specific file, function, or invariant most likely responsible before proposing a fix.", "Keep the investigation inside the current package or folder cluster unless the evidence proves the defect crosses boundaries."}, Validation: []string{"suspect file, behavior, or invariant is named"}},
+			{Title: "Step 1", Phase: "investigation", Description: "Run one broad suite pass only to compile the full initial failure inventory, then choose the first failing package or folder cluster and capture that cluster's current failure output.", ContextInstructions: []string{"Use the broad recursive test command only for the initial failure inventory, not as the default validation loop.", "From that first broad pass, compile the full set of failing packages, folders, or named tests before choosing the active cluster.", "After the initial inventory, prefer the narrowest failing package or test command before reading broader code.", "Capture the concrete failure text for only the active cluster so the next step works from observed behavior instead of memory.", "For large stored outputs, use grep_tool_result to narrow first, then read_tool_result_page to inspect the relevant pages.", "Do not move to another failing package or folder until this cluster is repaired or explicitly blocked."}, Validation: []string{"initial failure inventory is compiled", "active failing package, folder, or test command is explicit"}},
+			{Title: "Step 2", Phase: "investigation", Description: "Trace the failing code path for the active cluster and form one falsifiable local hypothesis for the failure.", ContextInstructions: []string{"Read the failing test and the nearest implementation path together.", "Name the specific file, function, or invariant most likely responsible before proposing a fix.", "When the supporting evidence is in a stored result file, inspect it with grep_tool_result plus read_tool_result_page instead of jumping straight to broad text slicing.", "Keep the investigation inside the current package or folder cluster unless the evidence proves the defect crosses boundaries."}, Validation: []string{"suspect file, behavior, or invariant is named"}},
 			{Title: "Step 3", Phase: "planning", Description: "Choose the smallest repair and the narrowest validation target before editing files.", ContextInstructions: []string{"Keep the repair boundary local unless the evidence proves a broader defect.", "State the exact validation target that could falsify the chosen repair."}, Validation: []string{"repair scope and validation command are concrete"}},
 			{Title: "Step 4", Phase: "execution", Description: "Implement the smallest plausible fix that explains the observed failure in the active package or folder cluster.", ContextInstructions: []string{"Touch only the files needed to test the current hypothesis.", "Avoid opportunistic cleanup or refactors unless the plan explicitly requires them.", "Finish the repair attempt for the current package or folder cluster before moving to another cluster."}, Validation: []string{"change stays within the observed repair boundary"}},
 			{Title: "Step 5", Phase: "execution", Description: "Rerun the narrowest relevant tests for the active cluster, then widen validation only if the local fix passes.", ContextInstructions: []string{"Run the original failing check first.", "If the first failure came from a broad suite run, convert it into a targeted package or test rerun before doing anything broader.", "Do not rerun the full recursive suite until the current cluster is fixed and you are ready to confirm broader progress.", "Only move to the next failing package or folder after the current cluster passes or is explicitly blocked."}, Validation: []string{"original failing check rerun", "broader validation widened only when justified"}},
@@ -616,6 +616,7 @@ type storedPlanningArtifact struct {
 	Status         string         `json:"status"`
 	Plan           []string       `json:"plan,omitempty"`
 	Notes          []string       `json:"notes,omitempty"`
+	Evidence       []string       `json:"evidence,omitempty"`
 	NextSteps      []string       `json:"next_steps,omitempty"`
 	StructuredData map[string]any `json:"structured_data,omitempty"`
 }
@@ -654,6 +655,28 @@ func (a *CopilotAgent) loadStoredPlanningArtifact() (storedPlanningArtifact, boo
 func (a *CopilotAgent) hasStoredPlanningArtifact() bool {
 	_, ok := a.loadStoredPlanningArtifact()
 	return ok
+}
+
+// loadStoredPhaseArtifact loads any phase's persisted artifact by phase ID (e.g. "investigation", "execution"),
+// reusing the same storedPlanningArtifact shape since all phases persist under the same schema.
+func (a *CopilotAgent) loadStoredPhaseArtifact(phaseID string) (storedPlanningArtifact, bool) {
+	phaseID = strings.TrimSpace(phaseID)
+	if a == nil || phaseID == "" || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return storedPlanningArtifact{}, false
+	}
+	values, err := a.service.session.Memory.LoadWorkflowMemory("phase-artifact:" + phaseID)
+	if err != nil {
+		return storedPlanningArtifact{}, false
+	}
+	raw := strings.TrimSpace(values["artifact_json"])
+	if raw == "" {
+		return storedPlanningArtifact{}, false
+	}
+	var artifact storedPlanningArtifact
+	if err := json.Unmarshal([]byte(raw), &artifact); err != nil {
+		return storedPlanningArtifact{}, false
+	}
+	return artifact, true
 }
 
 func (a *CopilotAgent) hasExecutionReadyPlanningArtifact() bool {

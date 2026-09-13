@@ -63,6 +63,15 @@ func TestToolResultStorage_ListReadGrep(t *testing.T) {
 		t.Errorf("expected at least 5 lines, got %d", len(lines))
 	}
 
+	// Test ReadResultPage
+	pageContent, err := storage.ReadResultPage(file1, 2, 3)
+	if err != nil {
+		t.Fatalf("ReadResultPage failed: %v", err)
+	}
+	if !strings.Contains(pageContent, "[Page 2 of") || !strings.Contains(pageContent, "lines 4-6") {
+		t.Fatalf("expected page header with line range, got: %s", pageContent)
+	}
+
 	// Test GrepResult
 	matches, err := storage.GrepResult(file1, "ERROR", 10)
 	if err != nil {
@@ -131,6 +140,18 @@ func TestToolResultAnalysis_AnalyzeToolResultOperations(t *testing.T) {
 	}
 	if !strings.Contains(result, "ERROR: first") || !strings.Contains(result, "WARN: caution") {
 		t.Fatalf("expected sed output to include the requested range, got: %s", result)
+	}
+
+	result, err = agent.toolReadToolResultPage(ctx, map[string]any{
+		"file_path": filePath,
+		"page":      1,
+		"page_size": 2,
+	})
+	if err != nil {
+		t.Fatalf("toolReadToolResultPage failed: %v", err)
+	}
+	if !strings.Contains(result, "[Page 1 of") || !strings.Contains(result, "INFO: start") || !strings.Contains(result, "ERROR: first") {
+		t.Fatalf("expected first page output, got: %s", result)
 	}
 
 	result, err = agent.toolAnalyzeToolResult(ctx, map[string]any{
@@ -218,6 +239,18 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 	}
 	if !strings.Contains(result, "Connection timeout") || !strings.Contains(result, "Retry failed") {
 		t.Errorf("expected both error lines, got: %s", result)
+	}
+
+	pageResult, err := agent.toolReadToolResultPage(ctx, map[string]any{
+		"file_path": filePath,
+		"page":      1,
+		"page_size": 3,
+	})
+	if err != nil {
+		t.Fatalf("toolReadToolResultPage failed: %v", err)
+	}
+	if !strings.Contains(pageResult, "[Page 1 of") || !strings.Contains(pageResult, "INFO: Starting test run") {
+		t.Fatalf("expected page read output, got: %s", pageResult)
 	}
 }
 

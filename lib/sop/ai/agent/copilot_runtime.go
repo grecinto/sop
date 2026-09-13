@@ -2040,6 +2040,7 @@ Step 1: CAPTURE TEST FAILURE
 - If output shows file_path: IMMEDIATELY call read_tool_result(file_path="...") to read it
 - If the saved output is large: call grep_tool_result(file_path="...", pattern="FAIL|Error|panic|--- FAIL") first
 - If grep_tool_result returns matching line numbers: IMMEDIATELY call read_tool_result around the first failing line
+- For broad review of stored outputs, use read_tool_result_page(file_path="...", page=N, page_size=M)
 - Extract actual error message
 - NEVER proceed without seeing the error
 
@@ -2092,7 +2093,7 @@ CRITICAL RULES:
 - If a tool result includes file_path or says full output was saved, do not conclude from the truncated preview alone.
 - For known signals such as PASS, FAIL, panic, timeout, or ERROR, call grep_tool_result(file_path="...", pattern="...") first.
 - If grep_tool_result returns concrete failing line numbers, call read_tool_result(file_path="...", start_line=N, end_line=M) around those lines before any broader head/tail read.
-- For open-ended investigation, call read_tool_result(file_path="...", start_line=X, end_line=Y) or analyze_tool_result(file_path="...", operation="sed"|"head"|"tail"|"wc").
+- For open-ended investigation, call read_tool_result(file_path="...", start_line=X, end_line=Y), read_tool_result_page(file_path="...", page=N, page_size=M), or analyze_tool_result(file_path="...", operation="sed"|"head"|"tail"|"wc").
 - Use the saved file to confirm the outcome before making a final claim.
 `)
 	}

@@ -81,8 +81,8 @@ func (f *FileSearchAdapter) SearchWithContext(ctx context.Context, task Task, st
 		// --context 2: show 2 lines before/after match
 		// --max-count 5: limit to 5 matches per file to avoid huge results
 		// --color never: disable color output for clean parsing
-		cmd := exec.Command(rgPath, "--line-number", "--heading", "--context", "2", "--max-count", "5",
-			"--color", "never", "--glob", "*.go", "--glob", "*.md", "--glob", "*.txt", query, workingDir)
+		cmd := exec.Command(rgPath, "--hidden", "--no-ignore", "--line-number", "--heading", "--context", "2", "--max-count", "5",
+			"--color", "never", "--glob", "*.go", "--glob", "*.md", "--glob", "*.txt", "--glob", "*.ts", "--glob", "*.tsx", "--glob", "*.js", "--glob", "*.jsx", "--glob", "*.json", "--glob", "*.yaml", "--glob", "*.yml", query, workingDir)
 		output, cmdErr := cmd.CombinedOutput()
 
 		// ripgrep exits with code 1 when no matches found, which is not an error for us

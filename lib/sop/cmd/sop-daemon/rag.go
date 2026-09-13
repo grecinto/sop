@@ -1143,13 +1143,47 @@ func readContinueEditableFile(path string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(cleanPath) {
-		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+		cleanPath = resolveContinueEditablePath(cleanPath)
 	}
 	originalContent, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return "", nil, err
 	}
 	return cleanPath, originalContent, nil
+}
+
+func resolveContinueEditablePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	if trimmed == ".continue-repo" || strings.HasPrefix(trimmed, ".continue-repo"+string(os.PathSeparator)) {
+		return filepath.Clean(filepath.Join(resolveContinueRepoRootFrom(cwd()), trimmed))
+	}
+	return filepath.Clean(filepath.Join(cwd(), trimmed))
+}
+
+func resolveContinueRepoRootFrom(start string) string {
+	current := strings.TrimSpace(start)
+	if current == "" {
+		current = cwd()
+	}
+	if !filepath.IsAbs(current) {
+		current = filepath.Clean(filepath.Join(cwd(), current))
+	}
+	for {
+		if info, err := os.Stat(filepath.Join(current, ".continue-repo")); err == nil && info.IsDir() {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return cwd()
+		}
+		current = parent
+	}
 }
 
 func replaceOnceOrFail(content, find, replace string) (string, int, error) {

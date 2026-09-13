@@ -131,6 +131,9 @@ func EnableUndoForSharedInfrastructure(sharedInfra *SharedInfrastructure, undoMa
 	if sharedInfra == nil {
 		return
 	}
+	if sharedInfra.PatchEngine == nil {
+		sharedInfra.PatchEngine = &DefaultPatchEngine{}
+	}
 	// Wrap the existing patch engine
 	sharedInfra.PatchEngine = NewUndoAwarePatchEngine(sharedInfra.PatchEngine, undoManager)
 }

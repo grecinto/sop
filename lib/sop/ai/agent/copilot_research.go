@@ -40,6 +40,8 @@ func (a *CopilotAgent) buildResearchWorkflowGuidance(ctx context.Context, query 
 		workflow = append(workflow, "Review playbooks and recipes for systematic approaches to this type of task")
 	}
 
+	workflow = append(workflow, "For large stored outputs, use grep_tool_result to narrow the region first, then read_tool_result_page to inspect the relevant pages incrementally")
+
 	// Build guidance based on task complexity indicators
 	researchReason := a.inferResearchReason(query, taskCtx)
 

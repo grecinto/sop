@@ -1188,7 +1188,7 @@ func (d *DefaultTestRunner) detectProjectType(workingDir string) ProjectType {
 	}
 
 	// Node.js: package.json
-	if fileExists(filepath.Join(workingDir, "package.json")) {
+	if _, ok := findNearestFileUpward(workingDir, "package.json"); ok {
 		return ProjectTypeNode
 	}
 
@@ -1951,7 +1951,7 @@ func detectProjectTypeFromDir(workingDir string) ProjectType {
 	}
 
 	// Node.js: package.json
-	if fileExists(filepath.Join(workingDir, "package.json")) {
+	if _, ok := findNearestFileUpward(workingDir, "package.json"); ok {
 		return ProjectTypeNode
 	}
 
@@ -2504,14 +2504,37 @@ func inferModuleName(workingDir string) string {
 	}
 
 	// Node.js: package.json
-	if data, err := os.ReadFile(filepath.Join(workingDir, "package.json")); err == nil {
-		var pkg map[string]interface{}
-		if err := json.Unmarshal(data, &pkg); err == nil {
-			if name, ok := pkg["name"].(string); ok {
-				return name
+	if packagePath, ok := findNearestFileUpward(workingDir, "package.json"); ok {
+		if data, err := os.ReadFile(packagePath); err == nil {
+			var pkg map[string]interface{}
+			if err := json.Unmarshal(data, &pkg); err == nil {
+				if name, ok := pkg["name"].(string); ok {
+					return name
+				}
 			}
 		}
 	}
 
 	return ""
+}
+
+func findNearestFileUpward(startDir, fileName string) (string, bool) {
+	trimmedStart := strings.TrimSpace(startDir)
+	trimmedFile := strings.TrimSpace(fileName)
+	if trimmedStart == "" || trimmedFile == "" {
+		return "", false
+	}
+
+	current := filepath.Clean(trimmedStart)
+	for {
+		candidate := filepath.Join(current, trimmedFile)
+		if fileExists(candidate) {
+			return candidate, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
 }

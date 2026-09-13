@@ -164,13 +164,20 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems, resolvedProfile)
 		retryState.maybeExtendBudget(toolResults, iteration)
 
+		// Budget-exhaustion nudge: when only one tool-call turn remains, tell the model to
+		// persist findings via capture now instead of spending the last turn on more
+		// investigation that will be discarded when the loop hits its step limit.
+		if retryState.allowedTurns-iteration <= 1 && toolCallsIncludeTool(request.Tools, "capture") {
+			request.Instructions = appendFinalTurnCaptureNudge(request.Instructions)
+		}
+
 		// Force tool continuation if task requires more steps
 		if iteration < retryState.allowedTurns && needsToolContinuation(req.UserQuery, toolResults) && !strings.Contains(toolResults[len(toolResults)-1].Result, "Clarification required:") {
 			request.ToolChoice = buildToolChoiceForceCall(request.Tools)
 		}
 	}
 
-	finalText := openAIResponseFinalText(openAIResponsesResponse{OutputText: "I reached the tool-step limit while trying to answer. I’ll provide the best answer I can from the information gathered so far."})
+	finalText := openAIResponseFinalText(openAIResponsesResponse{OutputText: budgetExhaustedFallbackText(toolResults)})
 	resp := buildFinalResponse(l.modelName(), finalText, executedToolCalls, toolResults, "", "")
 	resp.EscalationState = retryState.escalationState
 	if resp.CarryoverState != nil {
@@ -200,6 +207,25 @@ func (l chatGPTOwnedReActLoop) sendRequest(ctx context.Context, request openAIRe
 	return l.generator.createResponses(ctx, request)
 }
 
+// budgetExhaustedFallbackText reports what was actually accomplished when the loop
+// hits its step limit, instead of a generic message that hides real progress (e.g. an
+// already-applied patch) from the user.
+func budgetExhaustedFallbackText(toolResults []ai.ReActToolResult) string {
+	for i := len(toolResults) - 1; i >= 0; i-- {
+		result := toolResults[i]
+		name := strings.ToLower(result.Name)
+		if !strings.Contains(name, "apply_patch") && !strings.Contains(name, "apply_multi_file_patch") {
+			continue
+		}
+		resultLower := strings.ToLower(result.Result)
+		if strings.Contains(resultLower, "error") || strings.Contains(resultLower, "not found") || strings.Contains(resultLower, "failed") {
+			break
+		}
+		return "I reached the tool-step limit, but a patch was applied based on the diagnosis gathered so far. Run the tests to confirm the fix before concluding."
+	}
+	return "I reached the tool-step limit while trying to answer. I’ll provide the best answer I can from the information gathered so far."
+}
+
 // requiresExtendedIterations detects workflows that typically need more tool chaining.
 func requiresExtendedIterations(tools []ai.ToolDefinition, query string) bool {
 	queryLower := strings.ToLower(query)
@@ -214,7 +240,9 @@ func requiresExtendedIterations(tools []ai.ToolDefinition, query string) bool {
 	// File editing workflows: search → read → edit → validate → save
 	isFileWorkflow := strings.Contains(queryLower, "fix") && strings.Contains(queryLower, "file") ||
 		strings.Contains(queryLower, "edit") && strings.Contains(queryLower, "code") ||
-		strings.Contains(queryLower, "refactor")
+		strings.Contains(queryLower, "refactor") ||
+		// "fix failing tests" needs investigate → patch → validate, same as file workflows.
+		strings.Contains(queryLower, "fix") && (strings.Contains(queryLower, "test") || strings.Contains(queryLower, "failing"))
 
 	// Multi-step automation
 	isComplexAutomation := strings.Contains(queryLower, "workflow") ||
@@ -403,6 +431,27 @@ func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAI
 	return request
 }
 
+// toolCallsIncludeTool reports whether the given tool name is present in the tool list.
+func toolCallsIncludeTool(tools []openAIResponsesTool, name string) bool {
+	for _, t := range tools {
+		if strings.EqualFold(strings.TrimSpace(t.Name), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// appendFinalTurnCaptureNudge tells the model to persist findings now rather than spend its
+// last remaining tool-call turn on more investigation that will be discarded once the owned
+// loop hits its step limit and returns a generic "reached the tool-step limit" answer.
+func appendFinalTurnCaptureNudge(instructions string) string {
+	nudge := "FINAL TURN: Only one tool call remains this turn. Call the capture tool now with a summary of what you have found so far, instead of using any more investigation tools. Do not let this turn end without capturing."
+	if strings.TrimSpace(instructions) == "" {
+		return nudge
+	}
+	return instructions + "\n\n" + nudge
+}
+
 // needsToolContinuation determines if the task requires more tool calls based on
 // the query intent and the tools that have been executed so far.
 func needsToolContinuation(query string, toolResults []ai.ReActToolResult) bool {
@@ -414,7 +463,10 @@ func needsToolContinuation(query string, toolResults []ai.ReActToolResult) bool 
 	lastTool := toolResults[len(toolResults)-1].Name
 
 	// Detect if last tool was read-only (status/query) and query implies action
-	readOnlyTools := []string{"status", "list", "read", "get", "search", "grep", "scan", "select", "explain"}
+	// "test"/"run_tests" is included: without it, finishing a validation run in a "fix"
+	// task doesn't force continuation, so the model is free to stop with plain text and
+	// ask the user for permission to keep going instead of proceeding to patch/capture.
+	readOnlyTools := []string{"status", "list", "read", "get", "search", "grep", "scan", "select", "explain", "test"}
 	actionKeywords := []string{"commit", "create", "fix", "patch", "update", "add", "delete", "write", "checkin", "check in", "implement", "refactor"}
 
 	isReadOnly := false
@@ -619,6 +671,20 @@ func executeToolCalls(ctx context.Context, req ai.ReasoningRequest, iteration, m
 				Type:   "function_call_output",
 				CallID: strings.TrimSpace(toolCall.NativeID),
 				Output: summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: toolCall.Name, Result: reminder.Result, ExecutionMode: ai.ReActToolResultExecutionModeStructuredSummary}),
+			})
+			continue
+		}
+		// Duplicate detection: the same investigation-style tool called with the same
+		// arguments already this owned-loop turn adds no new information and is a common
+		// source of "ran investigation one too many times" without the outcome improving.
+		if duplicateCount := countOwnedLoopDuplicateToolCalls(append(existingResults, results...), toolCall); duplicateCount > 0 && isOwnedLoopDedupCandidateTool(toolCall.Name) {
+			guidance := buildOwnedLoopDuplicateGuidance(toolCall.Name, duplicateCount)
+			duplicateResult := ai.ReActToolResult{Name: toolCall.Name, Args: cloneChatGPTToolArgs(toolCall.Args), Result: guidance}
+			results = append(results, duplicateResult)
+			outputItems = append(outputItems, openAIResponsesInputItem{
+				Type:   "function_call_output",
+				CallID: strings.TrimSpace(toolCall.NativeID),
+				Output: summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: toolCall.Name, Result: guidance, ExecutionMode: ai.ReActToolResultExecutionModeStructuredSummary}),
 			})
 			continue
 		}

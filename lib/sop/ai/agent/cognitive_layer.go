@@ -9,6 +9,7 @@ import (
 	log "log/slog"
 
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/planner"
 )
 
 type sessionCognitiveDecision struct {
@@ -17,13 +18,32 @@ type sessionCognitiveDecision struct {
 	SuggestedPhase string
 }
 
+// diagnosisMissingForPhase checks whether the current phase's persisted artifact carries a
+// repair task without a complete diagnosis (root_cause, evidence, fix_target, shared_with,
+// blast_radius). It reuses the same detection rules the patch-preview gate enforces so the
+// transition decision and the tool-level gate never disagree about diagnosis readiness.
+func (a *CopilotAgent) diagnosisMissingForPhase(phaseID string, query string) (missing []string, isRepair bool) {
+	if a == nil {
+		return nil, false
+	}
+	artifact, ok := a.loadStoredPhaseArtifact(phaseID)
+	if !ok {
+		return nil, false
+	}
+	isRepair = planner.IsRepairTaskForDiagnosis(artifact.Summary, artifact.Plan, nil) || planner.IsRepairTaskForDiagnosis(query, nil, nil)
+	if !isRepair {
+		return nil, false
+	}
+	return planner.DiagnosisFieldsMissing(artifact.StructuredData, artifact.Evidence), true
+}
+
 func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Context, query string, classification *AskTaskContext, toolCalls []ai.ToolCall, outcomeFacts []string, finalText string, clarificationRequest *ai.ClarificationRequest) phaseTransactionDecision {
 	if a == nil || classification == nil {
-		log.Info("Transaction evaluation: nil agent or classification")
+		log.Debug("Transaction evaluation: nil agent or classification")
 		return phaseTransactionDecision{}
 	}
 	if clarificationRequest != nil {
-		log.Info("Transaction evaluation: clarification pending")
+		log.Debug("Transaction evaluation: clarification pending")
 		return phaseTransactionDecision{}
 	}
 	currentPhase := strings.TrimSpace(strings.ToLower(classification.Phase))
@@ -36,7 +56,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		}
 	}
 
-	log.Info("Transaction evaluation start",
+	log.Debug("Transaction evaluation start",
 		"current_phase", currentPhase,
 		"orchestration_level", classification.OrchestrationLevel,
 		"execution_ready", classification.ExecutionReady,
@@ -45,7 +65,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		"phase_iteration", getPhaseIterationCount(workStreamCtx, currentPhase))
 
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
-		log.Info("Transaction evaluation: not coding_workflow domain", "domains", classification.Domains)
+		log.Debug("Transaction evaluation: not coding_workflow domain", "domains", classification.Domains)
 		if currentPhase == "execution" && !phaseTransactionHasGenericCompletionEvidence(toolCalls, outcomeFacts, finalText) {
 			reason := "current execution step is still incomplete; continue in the active phase until the capability confirms completion"
 			return phaseTransactionDecision{
@@ -57,21 +77,22 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		return phaseTransactionDecision{}
 	}
 	if !isManagedOrchestrationLevel(classification.OrchestrationLevel) {
-		log.Info("Transaction evaluation: not managed objective",
+		log.Debug("Transaction evaluation: not managed objective",
 			"orchestration_level", classification.OrchestrationLevel,
 			"expected", orchestrationManagedObjective)
 		return phaseTransactionDecision{}
 	}
 
 	// GENERAL COGNITIVE GATE: LLM-driven assessment for all phases
-	// If significant work was done (3+ tool calls), ask LLM what to do next
-	if len(toolCalls) >= 3 {
+	// Ask the LLM what to do next as soon as there is any tool activity, rather than
+	// waiting for 3+ tool calls to accumulate before consulting it.
+	if len(toolCalls) >= 1 {
 		iterationCount := getPhaseIterationCount(workStreamCtx, currentPhase)
 		if iterationCount < 2 { // Prevent infinite loops
 			directQuery, nextPhase, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
 			if directQuery != "" {
 				// LLM recommended specific action
-				log.Info("Cognitive gate: direct action detected",
+				log.Debug("Cognitive gate: direct action detected",
 					"current_phase", currentPhase,
 					"next_phase", nextPhase,
 					"query_preview", truncateString(directQuery, 100),
@@ -105,13 +126,28 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 
 		// Check if execution is still investigating/searching without generating patches yet
 		if phaseTransactionIsStillInvestigating(toolCalls) && !phaseTransactionMutatedCode(toolCalls) {
-			// Check phase iteration count to prevent infinite loops
-			iterationCount := getPhaseIterationCount(workStreamCtx, currentPhase)
-			if iterationCount >= 2 {
-				// Already ran execution 2+ times - let it complete naturally
-				log.Info("Execution phase iteration limit reached - allowing natural completion",
-					"iteration_count", iterationCount,
-					"phase", currentPhase)
+			// Diagnosis is a stronger, more specific signal than generic iteration counting: a
+			// repair task missing root_cause/evidence/fix_target/blast_radius should be told to
+			// capture diagnosis, not just nudged to keep searching.
+			if missing, isRepair := a.diagnosisMissingForPhase(currentPhase, query); isRepair && len(missing) > 0 {
+				reason := fmt.Sprintf("repair task diagnosis is incomplete (missing: %s); capture root_cause, evidence, fix_target, shared_with, and blast_radius before continuing", strings.Join(missing, ", "))
+				a.recordPhaseTransactionCognitiveState(ctx, currentPhase, reason)
+				return phaseTransactionDecision{
+					EnqueueNextPhase: true,
+					NextPhase:        currentPhase,
+					Reason:           reason,
+					DirectQuery:      "Capture structured diagnosis (root_cause, evidence, fix_target, shared_with, blast_radius) for the failures found so far before generating a patch.",
+				}
+			}
+
+			// Loop detection: use the purpose-built WorkStreamContext.CheckForLoop() detector
+			// (same-phase repeats, total iteration cap, A-B-C-A-B-C pattern) instead of a local
+			// iteration-count check, so a genuine stall is reported consistently everywhere.
+			if looping, loopReason := workStreamCtx.CheckForLoop(); looping {
+				log.Debug("Execution phase loop detected - stopping requeue",
+					"phase", currentPhase,
+					"loop_reason", loopReason)
+				a.recordPhaseTransactionCognitiveState(ctx, currentPhase, loopReason)
 				return phaseTransactionDecision{}
 			}
 
@@ -119,7 +155,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 			directQuery, nextPhase, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
 			if directQuery != "" {
 				// Found specific action - enqueue direct query
-				log.Info("Cognitive gate: direct action detected (execution fallback)",
+				log.Debug("Cognitive gate: direct action detected (execution fallback)",
 					"next_phase", nextPhase,
 					"query_preview", truncateString(directQuery, 100),
 					"reason", reason)
@@ -133,7 +169,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 			}
 
 			// Fallback to generic guidance
-			reason = a.buildExecutionGuidanceFromState(workStreamCtx, toolCalls)
+			reason = a.buildExecutionGuidanceFromState(currentPhase, workStreamCtx, toolCalls)
 			if reason == "" {
 				// No specific guidance - let it complete naturally
 				return phaseTransactionDecision{}
@@ -147,23 +183,11 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 			}
 		}
 
-		return phaseTransactionDecision{}
-	}
-
-	// Planning phase to execution transition
-	if currentPhase == "execution" && !a.hasExecutionReadyPlanningArtifact() {
-		// Only require planning artifact for NEW execution phases that haven't done work yet
-		// If execution came from investigation with test failures, let it proceed without planning
-		hasTestEvidence := false
-		for _, toolCall := range toolCalls {
-			name := strings.TrimSpace(strings.ToLower(toolCall.Name))
-			if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") {
-				hasTestEvidence = true
-				break
-			}
-		}
-		// If this execution turn did actual work, don't require planning artifact
-		if len(toolCalls) == 0 && !hasTestEvidence {
+		// Cold-start execution phase: no tool calls yet and no ready planning artifact means
+		// execution has nothing to work from. This used to live in an unreachable second
+		// `currentPhase == "execution"` block below this one (dead code, since this block
+		// always returns) - moved here so it actually executes.
+		if len(toolCalls) == 0 && !a.hasExecutionReadyPlanningArtifact() {
 			reason := "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed"
 			a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
 			return phaseTransactionDecision{
@@ -172,7 +196,50 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 				Reason:           reason,
 			}
 		}
+
+		// A repair task that captured a complete diagnosis but did not mutate any code this
+		// turn is not actually fixed yet - without this, the diagnosis gate above can be
+		// satisfied and the turn silently ends without ever generating a patch.
+		if !phaseTransactionMutatedCode(toolCalls) {
+			if missing, isRepair := a.diagnosisMissingForPhase(currentPhase, query); isRepair && len(missing) == 0 {
+				// A diagnosis captured on a PRIOR execution turn (this is at least the 2nd time
+				// this phase has run) that still hasn't produced a patch usually means the
+				// hypothesis was wrong and the model kept re-diagnosing instead of patching (e.g.
+				// a "fix_target" that turns out to already be correct once read). Requeuing again
+				// just repeats the same wasted search/read cycle, so stop here and let the stall
+				// surface to the user instead of waiting for the generic 3-repeat loop detector.
+				if getPhaseIterationCount(workStreamCtx, currentPhase) >= 2 {
+					reason := "repair task has completed diagnosis on a prior turn without ever generating a patch; stopping auto-requeue to avoid repeating a wrong hypothesis"
+					log.Debug("Execution phase re-diagnosed without patching - stopping requeue",
+						"phase", currentPhase, "iteration_count", getPhaseIterationCount(workStreamCtx, currentPhase))
+					a.recordPhaseTransactionCognitiveState(ctx, currentPhase, reason)
+					return phaseTransactionDecision{}
+				}
+				if looping, loopReason := workStreamCtx.CheckForLoop(); looping {
+					log.Debug("Execution phase loop detected after diagnosis capture - stopping requeue",
+						"phase", currentPhase,
+						"loop_reason", loopReason)
+					a.recordPhaseTransactionCognitiveState(ctx, currentPhase, loopReason)
+					return phaseTransactionDecision{}
+				}
+				reason := "repair task diagnosis is complete; proceed directly to patch generation and validation instead of stopping"
+				a.recordPhaseTransactionCognitiveState(ctx, currentPhase, reason)
+				return phaseTransactionDecision{
+					EnqueueNextPhase: true,
+					NextPhase:        currentPhase,
+					Reason:           reason,
+					DirectQuery:      a.buildExecutionPatchQueryFromState(currentPhase),
+				}
+			}
+		}
+
+		return phaseTransactionDecision{}
 	}
+
+	// Note: the "execution requires a ready planning artifact when no tool calls have run yet"
+	// check now lives inside the currentPhase == "execution" block above (it was previously
+	// unreachable dead code here, since that block always returns before reaching this one).
+
 	if currentPhase == "planning" && a.hasExecutionReadyPlanningArtifact() {
 		reason := "managed coding planning produced a ready_for_execution planning artifact; continue in execution and use the persisted plan"
 		a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
@@ -945,13 +1012,27 @@ Focus on WHAT to do, not HOW (LLM will figure out how).`, toolSummary.String())
 
 // buildExecutionGuidanceFromState analyzes WorkStreamContext artifacts and builds specific guidance
 // This is a fallback heuristic when LLM assessment doesn't provide direct action
-func (a *CopilotAgent) buildExecutionGuidanceFromState(workStreamCtx *WorkStreamContext, currentToolCalls []ai.ToolCall) string {
+func (a *CopilotAgent) buildExecutionGuidanceFromState(currentPhase string, workStreamCtx *WorkStreamContext, currentToolCalls []ai.ToolCall) string {
 	if workStreamCtx == nil {
 		return "managed coding execution is investigating but has not generated patches yet; continue search-to-patch workflow"
 	}
 
-	// Check what's been accumulated in artifacts
-	hasTestFailures := false
+	// Check what's been accumulated in artifacts. Investigation often stores the failing
+	// tests and evidence before execution starts, so scan the full phase-artifact set.
+	hasTestFailures := hasTestFailureEvidenceInPhaseArtifacts(workStreamCtx.PhaseArtifacts)
+	// WorkStreamContext.PhaseArtifacts is never populated by the capture tool in production
+	// (it only writes the raw "phase-artifact:<phase>" memory key), so also check the real
+	// persisted artifact directly to avoid missing evidence that was actually captured.
+	if stored, ok := a.loadStoredPhaseArtifact(currentPhase); ok {
+		if hasStoredTestFailureEvidence(stored) {
+			hasTestFailures = true
+		}
+	}
+	if stored, ok := a.loadStoredPhaseArtifact("investigation"); ok {
+		if hasStoredTestFailureEvidence(stored) {
+			hasTestFailures = true
+		}
+	}
 	hasFileReads := false
 	hasSearchResults := false
 
@@ -983,17 +1064,218 @@ func (a *CopilotAgent) buildExecutionGuidanceFromState(workStreamCtx *WorkStream
 
 	// Build specific guidance based on state
 	if hasTestFailures && !hasFileReads && !hasSearchResults {
-		return "test failures identified but source files not yet examined; READ the specific files mentioned in test failures to understand the root cause, then generate patches"
+		return "test failures identified but source files not yet examined; READ the specific files mentioned in test failures to understand the root cause, then generate patches with execution_preview_patch"
 	}
 
 	if hasTestFailures && hasSearchResults && !hasFileReads {
-		return "test failures and search results available but source code not read; READ the complete source files (not just search snippets) to understand context, then generate patches"
+		return "test failures and search results available but source code not read; READ the complete source files (not just search snippets) to understand context, then generate patches with execution_preview_patch"
 	}
 
 	if hasTestFailures && hasFileReads {
-		return "test failures identified and source files examined; GENERATE specific patches to fix the identified issues based on the test failures and source code"
+		return a.buildExecutionPatchQueryFromState(currentPhase)
 	}
 
 	// Default: generic guidance for first iteration
-	return "managed coding execution is investigating but has not generated patches yet; run tests to identify failures, then read source files and generate patches"
+	return "managed coding execution is investigating but has not generated patches yet; run tests to identify failures, then read source files and generate patches with execution_preview_patch"
+}
+
+// hasStoredTestFailureEvidence checks a persisted phase artifact (loaded via
+// loadStoredPhaseArtifact) for test-failure evidence in its summary/evidence/structured data.
+func hasStoredTestFailureEvidence(artifact storedPlanningArtifact) bool {
+	candidates := append(append([]string{artifact.Summary}, artifact.Evidence...), artifact.NextSteps...)
+	for _, candidate := range candidates {
+		lower := strings.ToLower(candidate)
+		if strings.Contains(lower, "test") || strings.Contains(lower, "fail") {
+			return true
+		}
+	}
+	if artifact.StructuredData != nil {
+		if testResults, ok := artifact.StructuredData["test_results"]; ok && testResults != nil {
+			return true
+		}
+		if diagnosis, ok := artifact.StructuredData["diagnosis"].(map[string]any); ok {
+			if rootCause, ok := diagnosis["root_cause"].(string); ok {
+				lower := strings.ToLower(rootCause)
+				if strings.Contains(lower, "test") || strings.Contains(lower, "fail") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasTestFailureEvidenceInPhaseArtifacts(phaseArtifacts map[string]map[string]any) bool {
+	for _, artifact := range phaseArtifacts {
+		if len(artifact) == 0 {
+			continue
+		}
+		if evidence, ok := artifact["evidence"]; ok {
+			evidenceStr := strings.ToLower(fmt.Sprint(evidence))
+			if strings.Contains(evidenceStr, "test") || strings.Contains(evidenceStr, "fail") {
+				return true
+			}
+		}
+		if structuredData, ok := artifact["structured_data"].(map[string]any); ok {
+			if testResults, ok := structuredData["test_results"]; ok && testResults != nil {
+				return true
+			}
+			if evidence, ok := structuredData["evidence"]; ok {
+				evidenceStr := strings.ToLower(fmt.Sprint(evidence))
+				if strings.Contains(evidenceStr, "test") || strings.Contains(evidenceStr, "fail") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+type executionDiagnosisDetails struct {
+	RootCause   string
+	FixTarget   string
+	FocusSymbol string
+	SharedWith  string
+	BlastRadius string
+	Evidence    []string
+}
+
+func (a *CopilotAgent) buildExecutionPatchQueryFromState(phaseID string) string {
+	base := "Diagnosis is captured. Proceed directly to execution_preview_patch and execution_apply_patch for the identified fix_target, then run execution_run_tests to validate the fix. If you do not already know the exact line range, call execution_search_repo ONCE for the focus symbol to locate it, then execution_read_file ONCE for that exact region to get precise old_content, then generate the patch immediately - do not re-read the file from the top in sequential windows or repeat either call for the same target."
+	details := a.extractExecutionDiagnosisDetails(phaseID)
+	if details.isEmpty() {
+		return base
+	}
+	lines := []string{base}
+	if details.RootCause != "" {
+		lines = append(lines, "Root cause: "+details.RootCause)
+	}
+	if details.FixTarget != "" {
+		lines = append(lines, "Fix target: "+details.FixTarget)
+	}
+	if details.FocusSymbol != "" {
+		lines = append(lines, "Focus symbol: "+details.FocusSymbol)
+	}
+	if len(details.Evidence) > 0 {
+		lines = append(lines, "Evidence: "+strings.Join(details.Evidence, "; "))
+	}
+	if details.SharedWith != "" {
+		lines = append(lines, "Shared with: "+details.SharedWith)
+	}
+	if details.BlastRadius != "" {
+		lines = append(lines, "Blast radius: "+details.BlastRadius)
+	}
+	lines = append(lines, "execution_read_file and execution_search_repo remain available; avoid redundant re-reads of the same already-fetched region, but if you still need more content to build an exact patch, call the tool again yourself instead of stopping to ask the user for permission.")
+	return strings.Join(lines, "\n")
+}
+
+// extractExecutionDiagnosisDetails reads the same persisted phase artifact that
+// diagnosisMissingForPhase checks (loadStoredPhaseArtifact), not WorkStreamContext.PhaseArtifacts,
+// which nothing in the capture path ever populates.
+func (a *CopilotAgent) extractExecutionDiagnosisDetails(phaseID string) executionDiagnosisDetails {
+	if a == nil {
+		return executionDiagnosisDetails{}
+	}
+	stored, ok := a.loadStoredPhaseArtifact(phaseID)
+	if !ok {
+		return executionDiagnosisDetails{}
+	}
+	details := executionDiagnosisDetails{}
+	structuredData := stored.StructuredData
+	if structuredData != nil {
+		if diagnosis, ok := structuredData["diagnosis"].(map[string]any); ok {
+			structuredData = diagnosis
+		}
+		details.RootCause = formatExecutionDiagnosisValue(structuredData["root_cause"])
+		details.FixTarget = formatExecutionDiagnosisValue(structuredData["fix_target"])
+		details.FocusSymbol = formatExecutionDiagnosisValue(structuredData["focus_symbol"])
+		details.SharedWith = formatExecutionDiagnosisValue(structuredData["shared_with"])
+		details.BlastRadius = formatExecutionDiagnosisValue(structuredData["blast_radius"])
+	}
+	if len(stored.Evidence) > 0 {
+		details.Evidence = stored.Evidence
+	}
+	return details
+}
+
+func (d executionDiagnosisDetails) isEmpty() bool {
+	return strings.TrimSpace(d.RootCause) == "" && strings.TrimSpace(d.FixTarget) == "" && strings.TrimSpace(d.FocusSymbol) == "" && strings.TrimSpace(d.SharedWith) == "" && strings.TrimSpace(d.BlastRadius) == "" && len(d.Evidence) == 0
+}
+
+func formatExecutionDiagnosisValue(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case []string:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := strings.TrimSpace(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "; ")
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" && text != "<nil>" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "; ")
+	case map[string]any:
+		parts := make([]string, 0, len(v))
+		for _, key := range []string{"focus_symbol", "primary", "secondary_if_needed", "path", "file_path", "symbol"} {
+			if item, ok := v[key]; ok {
+				if text := formatExecutionDiagnosisValue(item); text != "" {
+					parts = append(parts, fmt.Sprintf("%s=%s", key, text))
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "; ")
+		}
+		fallback := make([]string, 0, len(v))
+		for key, item := range v {
+			if text := formatExecutionDiagnosisValue(item); text != "" {
+				fallback = append(fallback, fmt.Sprintf("%s=%s", key, text))
+			}
+		}
+		slices := fallback
+		if len(slices) == 0 {
+			return ""
+		}
+		return strings.Join(slices, "; ")
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func formatExecutionDiagnosisEvidence(value any) []string {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := strings.TrimSpace(item); text != "" {
+				result = append(result, text)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" && text != "<nil>" {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		if text := strings.TrimSpace(fmt.Sprint(v)); text != "" && text != "<nil>" {
+			return []string{text}
+		}
+		return nil
+	}
 }

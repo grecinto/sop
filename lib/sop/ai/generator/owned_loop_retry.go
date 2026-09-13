@@ -218,6 +218,64 @@ func (s *ownedLoopRetryState) exportedLearnings() []ai.RetryLearning {
 	return append([]ai.RetryLearning(nil), s.learnings...)
 }
 
+// ownedLoopDedupCandidateToolSubstrings lists read-only, investigation-style tools where an
+// exact repeat (same name, same args) within one owned-loop turn adds no new information.
+// Mutation and validation tools (apply_patch, run_tests, etc.) are intentionally excluded
+// since re-running them after a change is legitimate.
+var ownedLoopDedupCandidateToolSubstrings = []string{
+	"search_repo", "inspect_repo", "build_context", "index_repo_structure", "list_changed_files", "read_file",
+}
+
+func isOwnedLoopDedupCandidateTool(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, candidate := range ownedLoopDedupCandidateToolSubstrings {
+		if strings.Contains(lower, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// toolDefinitionsIncludeTool reports whether the given tool name is present in a
+// provider-agnostic tool definition list (used by Anthropic/Gemini owned loops).
+func toolDefinitionsIncludeTool(tools []ai.ToolDefinition, name string) bool {
+	for _, t := range tools {
+		if strings.EqualFold(strings.TrimSpace(t.Name), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedLoopToolCallSignature builds a stable name+args signature for duplicate comparison.
+// encoding/json sorts map keys alphabetically, so this is stable across calls.
+func ownedLoopToolCallSignature(name string, args map[string]any) string {
+	argsJSON, _ := json.Marshal(args)
+	return strings.ToLower(strings.TrimSpace(name)) + "|" + string(argsJSON)
+}
+
+// countOwnedLoopDuplicateToolCalls returns how many times an identical (name + args) tool call
+// has already produced a result earlier in this same owned-loop turn.
+func countOwnedLoopDuplicateToolCalls(priorResults []ai.ReActToolResult, toolCall ai.ToolCall) int {
+	signature := ownedLoopToolCallSignature(toolCall.Name, toolCall.Args)
+	count := 0
+	for _, prior := range priorResults {
+		if ownedLoopToolCallSignature(prior.Name, prior.Args) == signature {
+			count++
+		}
+	}
+	return count
+}
+
+// buildOwnedLoopDuplicateGuidance nudges the model away from repeating a call and, once it has
+// repeated more than once, tells it explicitly to switch to acting on results already gathered.
+func buildOwnedLoopDuplicateGuidance(toolName string, duplicateCount int) string {
+	if duplicateCount >= 2 {
+		return fmt.Sprintf("DUPLICATE_CALL_DETECTED: %s was already called with these exact arguments %d times this turn. Do not repeat it again - use the information already returned above, or move on to preview_patch/capture with what is already known.", toolName, duplicateCount)
+	}
+	return fmt.Sprintf("DUPLICATE_CALL_DETECTED: %s was already called with these exact arguments earlier this turn. Reuse the prior result instead of repeating the same call.", toolName)
+}
+
 func latestOwnedLoopHint(toolResults []ai.ReActToolResult) *ai.ToolProgressHint {
 	if len(toolResults) == 0 {
 		return nil

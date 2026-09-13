@@ -303,7 +303,7 @@ func TestListTools_CodingWorkflowRouting_HidesStoresSpacesPostgresAndSplunkTools
 			t.Fatalf("did not expect coding workflow routing to expose %s, got %#v", forbidden, names)
 		}
 	}
-	for _, required := range []string{"execute_local_command", "search_repo_files", "grep_repo_text", "run_repo_tests", "git_status", "read_tool_result", "grep_tool_result"} {
+	for _, required := range []string{"execute_local_command", "search_repo_files", "grep_repo_text", "run_repo_tests", "git_status", "read_tool_result", "read_tool_result_page", "grep_tool_result"} {
 		if !names[required] {
 			t.Fatalf("expected coding workflow routing to expose %s, got %#v", required, names)
 		}

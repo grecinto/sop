@@ -570,11 +570,17 @@ func (ctx *WorkStreamContext) CheckForLoop() (bool, string) {
 	return false, ""
 }
 
-// isRepeatingPattern detects if a sequence has a repeating sub-pattern
+// isRepeatingPattern detects if a sequence has a repeating sub-pattern of 2+ distinct phases
+// (e.g. A→B→A→B). A monotone run of the same single phase (A→A→A→A) is NOT a pattern loop -
+// that is legitimate multi-turn work within one phase, already covered by the separate
+// same-phase-repeat-count check in CheckForLoop.
 func isRepeatingPattern(phases []string) bool {
 	n := len(phases)
 	if n < 4 {
 		return false // Need at least 4 items to detect a 2-item pattern
+	}
+	if distinctStringCount(phases) < 2 {
+		return false // A monotone run of one phase is not an alternating-pattern loop
 	}
 
 	// Try pattern lengths from 2 to n/2
@@ -585,6 +591,9 @@ func isRepeatingPattern(phases []string) bool {
 
 		// Check if this pattern repeats
 		pattern := phases[:patternLen]
+		if distinctStringCount(pattern) < 2 {
+			continue // The repeating unit itself must contain more than one phase
+		}
 		isRepeating := true
 		for i := patternLen; i < n; i += patternLen {
 			segment := phases[i : i+patternLen]
@@ -749,6 +758,15 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// distinctStringCount returns how many unique values are present in the slice.
+func distinctStringCount(values []string) int {
+	seen := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		seen[v] = struct{}{}
+	}
+	return len(seen)
 }
 
 // WorkStreamSessionTTL defines how long saved session states are kept

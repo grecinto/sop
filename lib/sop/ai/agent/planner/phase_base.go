@@ -502,6 +502,12 @@ func isRepairTaskForDiagnosis(summary string, plan []string, evidence []string) 
 	return false
 }
 
+// IsRepairTaskForDiagnosis exposes isRepairTaskForDiagnosis for cross-package reuse
+// so the Ask transition decision can apply the same repair-task detection.
+func IsRepairTaskForDiagnosis(summary string, plan []string, evidence []string) bool {
+	return isRepairTaskForDiagnosis(summary, plan, evidence)
+}
+
 func clusterFailureEvidence(messages []string) []map[string]any {
 	if len(messages) == 0 {
 		return nil
@@ -565,8 +571,49 @@ func failureClusterKey(message string) string {
 	return strings.TrimSpace(lower)
 }
 
-func diagnosisFieldsMissing(structuredData map[string]any) []string {
+// isPlaceholderDiagnosisValue detects diagnosis fields that are present but only carry a
+// stand-in value (e.g. a map like {"status":"unresolved_in_current_turn","value":nil}) rather
+// than an actual root cause or fix target. Without this check, such placeholders satisfy the
+// "field is non-nil" test below and falsely mark the diagnosis as complete.
+func isPlaceholderDiagnosisValue(value any) bool {
+	placeholderMarkers := []string{
+		"unresolved", "not recoverable", "not_recoverable", "unrecoverable",
+		"unknown", "not available", "not_available", "tbd", "n/a", "pending",
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		if status, ok := v["status"]; ok {
+			statusText := strings.ToLower(strings.TrimSpace(fmt.Sprint(status)))
+			for _, marker := range placeholderMarkers {
+				if strings.Contains(statusText, marker) {
+					return true
+				}
+			}
+		}
+		if rawValue, hasValueKey := v["value"]; hasValueKey {
+			if rawValue == nil || strings.TrimSpace(fmt.Sprint(rawValue)) == "" || strings.TrimSpace(fmt.Sprint(rawValue)) == "<nil>" {
+				return true
+			}
+		}
+		return false
+	case string:
+		text := strings.ToLower(strings.TrimSpace(v))
+		for _, marker := range placeholderMarkers {
+			if strings.Contains(text, marker) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func diagnosisFieldsMissing(structuredData map[string]any, topLevelEvidence []string) []string {
 	if structuredData == nil {
+		if len(topLevelEvidence) > 0 {
+			return []string{"root_cause", "fix_target", "shared_with", "blast_radius"}
+		}
 		return []string{"root_cause", "evidence", "fix_target", "shared_with", "blast_radius"}
 	}
 
@@ -579,32 +626,37 @@ func diagnosisFieldsMissing(structuredData map[string]any) []string {
 
 	missing := make([]string, 0, 5)
 	rootCause := diagnosis["root_cause"]
-	if rootCause == nil || strings.TrimSpace(fmt.Sprint(rootCause)) == "" || strings.TrimSpace(fmt.Sprint(rootCause)) == "<nil>" {
+	if rootCause == nil || strings.TrimSpace(fmt.Sprint(rootCause)) == "" || strings.TrimSpace(fmt.Sprint(rootCause)) == "<nil>" || isPlaceholderDiagnosisValue(rootCause) {
 		missing = append(missing, "root_cause")
 	}
 
 	evidence := diagnosis["evidence"]
 	if evidence == nil {
-		missing = append(missing, "evidence")
+		// Fall back to the capture tool's top-level evidence field, since that's the
+		// schema-documented location the model naturally populates; only require
+		// nesting under structured_data.diagnosis.evidence when neither is present.
+		if len(topLevelEvidence) == 0 {
+			missing = append(missing, "evidence")
+		}
 	} else {
 		switch v := evidence.(type) {
 		case []string:
-			if len(v) == 0 {
+			if len(v) == 0 && len(topLevelEvidence) == 0 {
 				missing = append(missing, "evidence")
 			}
 		case []any:
-			if len(v) == 0 {
+			if len(v) == 0 && len(topLevelEvidence) == 0 {
 				missing = append(missing, "evidence")
 			}
 		default:
-			if strings.TrimSpace(fmt.Sprint(v)) == "" || strings.TrimSpace(fmt.Sprint(v)) == "<nil>" {
+			if (strings.TrimSpace(fmt.Sprint(v)) == "" || strings.TrimSpace(fmt.Sprint(v)) == "<nil>") && len(topLevelEvidence) == 0 {
 				missing = append(missing, "evidence")
 			}
 		}
 	}
 
 	fixTarget := diagnosis["fix_target"]
-	if fixTarget == nil || strings.TrimSpace(fmt.Sprint(fixTarget)) == "" || strings.TrimSpace(fmt.Sprint(fixTarget)) == "<nil>" {
+	if fixTarget == nil || strings.TrimSpace(fmt.Sprint(fixTarget)) == "" || strings.TrimSpace(fmt.Sprint(fixTarget)) == "<nil>" || isPlaceholderDiagnosisValue(fixTarget) {
 		missing = append(missing, "fix_target")
 	}
 
@@ -618,6 +670,13 @@ func diagnosisFieldsMissing(structuredData map[string]any) []string {
 		missing = append(missing, "blast_radius")
 	}
 	return missing
+}
+
+// DiagnosisFieldsMissing exposes diagnosisFieldsMissing for cross-package reuse
+// so the Ask transition decision can require the same diagnosis fields before
+// treating a repair task as ready to advance.
+func DiagnosisFieldsMissing(structuredData map[string]any, topLevelEvidence []string) []string {
+	return diagnosisFieldsMissing(structuredData, topLevelEvidence)
 }
 
 func requireRootCauseEvidence(artifact phaseArtifact, workstream WorkStreamContextReader) error {

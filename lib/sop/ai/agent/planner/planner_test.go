@@ -245,14 +245,37 @@ func TestDiagnosisInstrumentation_TracksRepairTasksWithoutDiagnosis(t *testing.T
 		t.Fatal("expected repair classification to trigger for failing-code tasks")
 	}
 
-	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"})
+	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"}, nil)
 	if len(missing) == 0 || !containsString(missing, "root_cause") || !containsString(missing, "evidence") {
 		t.Fatalf("expected missing diagnosis fields to include root_cause and evidence, got %#v", missing)
 	}
 }
 
+func TestDiagnosisFieldsMissing_TreatsUnresolvedPlaceholderAsMissing(t *testing.T) {
+	structuredData := map[string]any{
+		"diagnosis": map[string]any{
+			"root_cause": "Auth-path tests are failing due to a previously identified local defect, but the exact file/function-level target is not recoverable from the currently visible state preview.",
+			"fix_target": map[string]any{
+				"note":   "A prior turn identified a concrete fix target, but it is not present in the recoverable preview returned by state.",
+				"status": "unresolved_in_current_turn",
+				"value":  nil,
+			},
+			"shared_with":  []any{"auth test cluster"},
+			"blast_radius": map[string]any{"scope": "local to auth path"},
+		},
+	}
+
+	missing := diagnosisFieldsMissing(structuredData, []string{"auth test failure evidence"})
+	if !containsString(missing, "root_cause") {
+		t.Fatalf("expected placeholder root_cause text to be treated as missing, got %#v", missing)
+	}
+	if !containsString(missing, "fix_target") {
+		t.Fatalf("expected unresolved fix_target placeholder to be treated as missing, got %#v", missing)
+	}
+}
+
 func TestPhaseBPreviewPatchWarnsWhenDiagnosisMissing(t *testing.T) {
-	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"})
+	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"}, nil)
 	if len(missing) == 0 || !containsString(missing, "root_cause") || !containsString(missing, "evidence") {
 		t.Fatalf("expected missing diagnosis fields to be reported by the soft-gate helper, got %#v", missing)
 	}
@@ -264,9 +287,9 @@ func TestPhaseBPreviewPatchWarnsWhenDiagnosisMissing(t *testing.T) {
 func TestPhaseCPreviewPatchRequiresDiagnosisForRepairTasks(t *testing.T) {
 	phase := newCodingPhase("execution", nil)
 	_, err := phase.runPreviewPatch(context.Background(), map[string]any{
-		"query":      "fix the failing parser regression",
+		"query":       "fix the failing parser regression",
 		"working_dir": ".",
-		"file_path":  "pkg/parser.go",
+		"file_path":   "pkg/parser.go",
 		"old_content": "func Parse() {}",
 		"new_content": "func Parse() { return nil }",
 	})
@@ -281,9 +304,9 @@ func TestPhaseCPreviewPatchRequiresDiagnosisForRepairTasks(t *testing.T) {
 func TestPhaseDRequiresSharedCauseAndBlastRadiusInDiagnosis(t *testing.T) {
 	phase := newCodingPhase("execution", nil)
 	_, err := phase.runPreviewPatch(context.Background(), map[string]any{
-		"query":      "fix the failing parser regression",
+		"query":       "fix the failing parser regression",
 		"working_dir": ".",
-		"file_path":  "pkg/parser.go",
+		"file_path":   "pkg/parser.go",
 		"old_content": "func Parse() {}",
 		"new_content": "func Parse() { return nil }",
 		"structured_data": map[string]any{
