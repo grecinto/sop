@@ -30,6 +30,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-08-29.
 | [CONTINUE_TOKEN_OPTIMIZATION_PLAN.md](CONTINUE_TOKEN_OPTIMIZATION_PLAN.md) | Plan for Continue-class token savings on the native bridge while preserving SOP Ask as the sole orchestrator |
 | [CONTINUE_BRIDGE_API_SPEC.md](CONTINUE_BRIDGE_API_SPEC.md) | First-pass API contract for the local Continue bridge, including chat streaming and tool invocation shapes |
 | [CONTINUE_IDE_WORKFLOW_SURFACE.md](CONTINUE_IDE_WORKFLOW_SURFACE.md) | Continue tool inventory, newly surfaced IDE-native capabilities, AI Studio control boundary, and SDLC coverage assessment |
+| [CONTINUE_COPILOT_INTEGRATION_CONTRACT.md](CONTINUE_COPILOT_INTEGRATION_CONTRACT.md) | Behavior and interface contract for AI Studio preflight recall, Continue execution, STM write-back, and background STM-to-LTM consolidation |
 
 ## 🏗️ Core Architecture
 

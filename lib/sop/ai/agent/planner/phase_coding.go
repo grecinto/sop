@@ -1415,7 +1415,7 @@ func (p *CodingPhase) runApplyPatch(ctx context.Context, args map[string]any) (s
 	}
 
 	patchOps := infra.NewPatchOperations()
-	if err := patchOps.ApplyPatch(task, patch, task.State); err != nil {
+	if err := patchOps.ApplyPatch(ctx, task, patch, task.State); err != nil {
 		return "", fmt.Errorf("apply patch: %w", err)
 	}
 	return fmt.Sprintf("Applied patch to %s", patch.FilePath), nil
@@ -1443,7 +1443,7 @@ func (p *CodingPhase) runApplyMultiFilePatch(ctx context.Context, args map[strin
 
 	// Apply all patches - collect both successes and failures
 	for i, patch := range patches {
-		if err := patchOps.ApplyPatch(task, patch, task.State); err != nil {
+		if err := patchOps.ApplyPatch(ctx, task, patch, task.State); err != nil {
 			failedFiles = append(failedFiles, fmt.Sprintf("%s: %v", patch.FilePath, err))
 		} else {
 			appliedFiles = append(appliedFiles, patch.FilePath)

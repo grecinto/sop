@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/ai/obfuscation"
 	"github.com/sharedcode/sop/btree"
 )
@@ -524,6 +527,86 @@ func TestBuildVirtualMemoryRecallContext_IncludesRecallQualityMetrics(t *testing
 	summary := agent.buildVirtualMemoryRecallContext(ctx, "retry logic after payment errors")
 	if !strings.Contains(summary, "drift:") || !strings.Contains(summary, "exact_hit_rate") || !strings.Contains(summary, "semantic_hit_rate") {
 		t.Fatalf("expected drift summary plus exact_hit_rate and semantic_hit_rate metrics in memory neighborhood, got: %s", summary)
+	}
+}
+
+func TestBuildContinueMemoryGuidance_UsesLTMRecallWhenSessionMemoryIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	testDir := "./test_data/continue_memory_guidance"
+	os.RemoveAll(testDir)
+	defer os.RemoveAll(testDir)
+
+	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{testDir}}
+	sysDB := database.NewDatabase(sysDBOptions)
+
+	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{"sop": sysDBOptions}, sysDB)
+	agent.service = &Service{
+		domain:   &mockDomain{emb: &mockEmbeddings{}},
+		session:  NewRunnerSession(),
+		systemDB: sysDB,
+	}
+	agent.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{
+		ID:     sop.NewUUID(),
+		Label:  "Continue memory",
+		Status: "open",
+		Exchanges: []Interaction{{
+			Role:    RoleUser,
+			Content: "Use small edits and validate before delivery",
+		}},
+	}
+	agent.service.session.Memory.AddThread(thread)
+	agent.service.session.Memory.CurrentThreadID = thread.ID
+	agent.Memory = memory.NewMemoryUnit("agent123")
+	agent.brain = &MockGenerator{}
+	agent.service.generator = agent.brain
+
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin write transaction failed: %v", err)
+	}
+	ltm, err := sysDB.OpenKnowledgeBase(ctx, agent.Memory.LongTermMemoryName(), tx, agent.brain, agent.service.domain.Embedder(), false)
+	if err != nil {
+		t.Fatalf("open ltm failed: %v", err)
+	}
+	if err := ltm.IngestThoughts(ctx, []memory.Thought[map[string]any]{
+		{
+			CategoryPath: "Team Patterns/Continue/Memory",
+			Summaries:    []string{"Always keep workflow edits small and validate before delivery"},
+			Data:         map[string]any{"source": "continue_memory_test"},
+		},
+	}, "system"); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ingest ltm thought failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit ltm thought failed: %v", err)
+	}
+	if err := sysDB.Vectorize(ctx, agent.Memory.LongTermMemoryName(), agent.brain, agent.service.domain.Embedder(), 50); err != nil {
+		t.Fatalf("vectorize ltm failed: %v", err)
+	}
+
+	guidance, err := agent.BuildContinueMemoryGuidance(ctx, "Always keep workflow edits small and validate before delivery", "planning", map[string]any{"coding_task_type": "implementation"})
+	if err != nil {
+		t.Fatalf("BuildContinueMemoryGuidance failed: %v", err)
+	}
+	if len(guidance.ImplementationNotes) == 0 {
+		t.Fatal("expected implementation notes from memory recall")
+	}
+	if len(guidance.ReferenceContext) == 0 {
+		t.Fatal("expected reference context from memory recall")
+	}
+	foundRelevantReference := false
+	for _, ref := range guidance.ReferenceContext {
+		if ref.Kind == "memory_recall" || ref.Kind == "session_memory" {
+			foundRelevantReference = true
+			if strings.TrimSpace(ref.Content) == "" {
+				t.Fatalf("expected non-empty reference content, got %+v", ref)
+			}
+		}
+	}
+	if !foundRelevantReference {
+		t.Fatalf("expected a memory recall or session memory reference, got %+v", guidance.ReferenceContext)
 	}
 }
 

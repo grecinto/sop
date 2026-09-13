@@ -515,7 +515,7 @@ func (s *ApplyFixStep) OnAfterToolResult(
 	}
 	runState := RunState{}
 
-	err := patchOps.ApplyPatch(task, s.patch, runState)
+	err := patchOps.ApplyPatch(ctx, task, s.patch, runState)
 	if err != nil {
 		s.SetStepState("error", err.Error())
 		return state, false, err

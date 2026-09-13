@@ -22,8 +22,11 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
+	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/generator"
+	"github.com/sharedcode/sop/ai/memory"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -35,6 +38,20 @@ type stubSharedAgent struct {
 type recordingQueryAgent struct {
 	queries    []string
 	queriesOut *[]string
+}
+
+type continueTeamPracticeMockGenerator struct{}
+
+func (g *continueTeamPracticeMockGenerator) Name() string { return "continue-team-practice-test" }
+
+func (g *continueTeamPracticeMockGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	return ai.GenOutput{}, nil
+}
+
+func (g *continueTeamPracticeMockGenerator) EstimateCost(inTokens, outTokens int) float64 { return 0 }
+
+func (g *continueTeamPracticeMockGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
 }
 
 type executorAwareAgent struct {
@@ -370,6 +387,75 @@ func TestContinueChatHandler_AutoEnrichesGuidanceVariablesForImplementationPlann
 	metadata, ok := payload.Variables["continue_guidance_metadata"].(map[string]any)
 	if !ok || metadata["source"] != "ltm_team_patterns" {
 		t.Fatalf("expected guidance metadata, got %#v", payload.Variables["continue_guidance_metadata"])
+	}
+}
+
+func TestContinueChatHandler_MergesKnowledgeBaseAndMemoryGuidance(t *testing.T) {
+	agent := &recordingAskAgent{
+		guidance: sharedagent.ContinueDelegationGuidance{
+			TeamPractices: []string{"Preserve public interfaces"},
+			Metadata:      map[string]any{"source": "ltm_team_patterns"},
+		},
+		kbGuidance: sharedagent.ContinueDelegationGuidance{
+			TeamPractices:   []string{"Use the selected KnowledgeBase as grounding"},
+			SuccessCriteria: []string{"Follow KB-backed conventions"},
+			ReferenceContext: []sharedagent.ContinueDelegationReference{{
+				Kind:    "knowledge_base",
+				Source:  "selected_space",
+				Title:   "Selected KnowledgeBase Context",
+				Content: "KB evidence",
+			}},
+			Metadata: map[string]any{"source": "knowledge_base"},
+		},
+		memoryGuidance: sharedagent.ContinueDelegationGuidance{
+			Constraints: []string{"Preserve session memory continuity"},
+			ReferenceContext: []sharedagent.ContinueDelegationReference{{
+				Kind:    "session_memory",
+				Source:  "active_session_memory",
+				Title:   "Session memory",
+				Content: "Session memory evidence",
+			}},
+			Metadata: map[string]any{"source": "session_memory"},
+		},
+	}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-session-merged-guidance","mode":"plan","message":"Implement retry handling for payment webhooks","workspace":{"root":".","active_file":"payments/webhook.go"},"context":{"open_files":["payments/webhook.go"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload")
+	}
+	teamPractices, ok := payload.Variables["continue_team_practices"].([]string)
+	if !ok || len(teamPractices) < 2 {
+		t.Fatalf("expected merged team practices, got %#v", payload.Variables["continue_team_practices"])
+	}
+	if _, ok := payload.Variables["continue_constraints"].([]string); !ok {
+		t.Fatalf("expected merged constraints, got %#v", payload.Variables["continue_constraints"])
+	}
+	refs, ok := payload.Variables["continue_reference_context"].([]any)
+	if !ok || len(refs) < 2 {
+		t.Fatalf("expected merged reference context, got %#v", payload.Variables["continue_reference_context"])
+	}
+	metadata, ok := payload.Variables["continue_guidance_metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected merged guidance metadata, got %#v", payload.Variables["continue_guidance_metadata"])
+	}
+	if metadata["source"] == nil {
+		t.Fatalf("expected guidance metadata source to be present, got %#v", metadata)
+	}
+	sources, ok := metadata["sources"].([]string)
+	if !ok || len(sources) < 3 {
+		t.Fatalf("expected merged guidance sources list, got %#v", metadata["sources"])
 	}
 }
 
@@ -1337,6 +1423,89 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	}
 }
 
+func TestContinueAgentExecutionRecordsUndoTransactionForStructuredWorkerResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "payments", "service.go")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	original := "package payments\n\nfunc Process() string {\n  return \"before\"\n}\n"
+	if err := os.WriteFile(filePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write original file: %v", err)
+	}
+
+	service := &localRAGService{service: &recordingQueryAgent{}, continueState: newContinueBridgeSessionStore(), continueWorkers: newContinueBridgeWorkerStore()}
+	result := continueExecutionResult{
+		Status:  "completed",
+		Summary: "Patched payments/service.go",
+		ModifiedFiles: []continueExecutionModifiedFile{{
+			FilePath:      "payments/service.go",
+			CRUDOperation: "update",
+			DiffSummary:   "Updated payment processing return value",
+			Metadata:      map[string]any{"phase": "execution"},
+		}},
+		Metadata: map[string]any{"requested_phase": "execution", "mode": "apply"},
+	}
+	req := continueAgentExecuteRequest{
+		RequestID:      "undo-record-request-1",
+		SessionID:      "continue-worker-undo-record",
+		Task:           "Apply the prepared payment patch",
+		Mode:           "apply",
+		RequestedPhase: "execution",
+		Context: struct {
+			WorkspaceRoot string   `json:"workspace_root"`
+			ActiveFile    string   `json:"active_file"`
+			SelectedText  string   `json:"selected_text"`
+			OpenFiles     []string `json:"open_files"`
+		}{
+			WorkspaceRoot: tmpDir,
+			ActiveFile:    filePath,
+			OpenFiles:     []string{filePath},
+		},
+		HQ: struct {
+			BaseURL   string `json:"base_url,omitempty"`
+			Port      string `json:"port,omitempty"`
+			UserID    string `json:"user_id,omitempty"`
+			SessionID string `json:"session_id,omitempty"`
+		}{
+			UserID:    "alice",
+			SessionID: "session-undo-record",
+		},
+	}
+
+	if err := recordContinueDelegatedUndoTransaction(context.Background(), req, &result); err != nil {
+		t.Fatalf("record delegated undo transaction: %v", err)
+	}
+
+	mgr, err := getContinueUndoManager("alice", tmpDir)
+	if err != nil {
+		t.Fatalf("get continue undo manager: %v", err)
+	}
+	transactions, err := mgr.SemanticSearch(context.Background(), codingworkflow.UndoQuery{Limit: 10, RankBy: codingworkflow.RankByTimeDesc})
+	if err != nil {
+		t.Fatalf("semantic search undo transactions: %v", err)
+	}
+	if len(transactions) == 0 {
+		t.Fatalf("expected undo transaction to be created for delegated continue result")
+	}
+	if transactions[0].WorkflowType != "test_fix" && transactions[0].WorkflowType != "implementation" {
+		t.Fatalf("unexpected workflow type: %q", transactions[0].WorkflowType)
+	}
+	if len(transactions[0].ModifiedFiles) != 1 {
+		t.Fatalf("expected one modified file in undo transaction, got %d", len(transactions[0].ModifiedFiles))
+	}
+	if transactions[0].ModifiedFiles[0].FilePath != "payments/service.go" {
+		t.Fatalf("expected recorded file path, got %q", transactions[0].ModifiedFiles[0].FilePath)
+	}
+	if transactions[0].ModifiedFiles[0].OriginalHash == "" {
+		t.Fatalf("expected original hash to be captured for undo restore")
+	}
+
+	if got := service.ensureContinueSessionStore(); got == nil || got.sessions == nil {
+		t.Fatalf("continue session store should remain initialized")
+	}
+}
+
 func TestBuildContinueBridgeEnvelope_PopulatesStructuredIDEContextVariables(t *testing.T) {
 	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
 		SessionID: "sess-ctx",
@@ -1761,6 +1930,27 @@ func TestReadContinueWorkerResponse_AvoidsBufferingLargeStructuredDonePayload(t 
 	}
 }
 
+func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
+	oldCfg := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldCfg)
+
+	t.Run("continue default", func(t *testing.T) {
+		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
+		backend := newDefaultIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		if _, ok := backend.(*continueIDEWorkerBackend); !ok {
+			t.Fatalf("expected continue workflow backend, got %T", backend)
+		}
+	})
+
+	t.Run("daemon override", func(t *testing.T) {
+		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "daemon"})
+		backend := newDefaultIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		if _, ok := backend.(daemonShellIDEWorkerBackend); !ok {
+			t.Fatalf("expected daemon workflow backend, got %T", backend)
+		}
+	})
+}
+
 func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()}
 	defer service.shellSessions.CloseAll()
@@ -1781,6 +1971,10 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 		Capabilities: []string{"apply_patch", "read_context"},
 		IDE:          "vscode",
 	})
+
+	oldCfg := sopbackend.GetConfig()
+	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
+	defer sopbackend.SetConfig(oldCfg)
 
 	backend := newDefaultIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
@@ -1824,6 +2018,10 @@ func TestDefaultIDEWorkerBackend_InspectSessionFallsBackToDaemonShell(t *testing
 	if _, _, err := mgr.Run("daemon-shell-worker", "cd /tmp", 2*time.Second); err != nil {
 		t.Fatalf("seed shell session failed: %v", err)
 	}
+
+	oldCfg := sopbackend.GetConfig()
+	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "daemon"})
+	defer sopbackend.SetConfig(oldCfg)
 
 	service := &localRAGService{service: &recordingQueryAgent{}, shellSessions: mgr}
 	backend := newDefaultIDEWorkerBackend(service)
@@ -3599,6 +3797,148 @@ func TestLoadDaemonLLMPoolStateSurvivesRestartAndRejectsOlderClientPool(t *testi
 	}
 }
 
+func TestPersistAndLoadDaemonLLMPoolStatePreservesContinueExecutionMemoryBrief(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	oldPath := daemonLLMPoolStatePath
+	defer func() { daemonLLMPoolStatePath = oldPath }()
+	daemonLLMPoolStatePath = filepath.Join(t.TempDir(), "state", "daemon_llm_pool_state.json")
+
+	ctxKey := continueSessionContextKey("continue-session-memory", "", "user-memory")
+	daemonSessionStore.mu.Lock()
+	oldStore := daemonSessionStore.data
+	daemonSessionStore.data = map[string]daemonSessionContext{
+		ctxKey: {
+			HQUserID:                  "user-memory",
+			HQSessionID:               "continue-session-memory",
+			ContinueMemorySummary:     "Summary: updated onboarding flow\nFiles: ui/onboarding.ts(update)",
+			ContinueMemoryUpdatedAtMS: 4242,
+			LastUpdated:               time.UnixMilli(4242).UTC(),
+		},
+	}
+	daemonSessionStore.mu.Unlock()
+	defer func() {
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data = oldStore
+		daemonSessionStore.mu.Unlock()
+	}()
+
+	if err := persistDaemonLLMPoolState(); err != nil {
+		t.Fatalf("persistDaemonLLMPoolState() error = %v", err)
+	}
+
+	daemonSessionStore.mu.Lock()
+	daemonSessionStore.data = map[string]daemonSessionContext{}
+	daemonSessionStore.mu.Unlock()
+
+	if err := loadDaemonLLMPoolState(); err != nil {
+		t.Fatalf("loadDaemonLLMPoolState() error = %v", err)
+	}
+
+	daemonSessionStore.mu.Lock()
+	loaded := daemonSessionStore.data[ctxKey]
+	daemonSessionStore.mu.Unlock()
+	if loaded.ContinueMemorySummary != "Summary: updated onboarding flow\nFiles: ui/onboarding.ts(update)" {
+		t.Fatalf("loaded continue memory summary = %q, want preserved summary", loaded.ContinueMemorySummary)
+	}
+	if loaded.ContinueMemoryUpdatedAtMS != 4242 {
+		t.Fatalf("loaded continue memory updated at ms = %d, want %d", loaded.ContinueMemoryUpdatedAtMS, 4242)
+	}
+}
+
+func TestContinueChatHandlerAddsStoredExecutionMemoryBriefToGuidance(t *testing.T) {
+	ctxKey := continueSessionContextKey("continue-session-memory-guidance", "", "user-guidance")
+	daemonSessionStore.mu.Lock()
+	oldStore := daemonSessionStore.data
+	daemonSessionStore.data = map[string]daemonSessionContext{
+		ctxKey: {
+			HQUserID:                  "user-guidance",
+			HQSessionID:               "continue-session-memory-guidance",
+			ContinueMemorySummary:     "Summary: keep the validation note and modified file list",
+			ContinueMemoryUpdatedAtMS: 9876,
+			LastUpdated:               time.UnixMilli(9876).UTC(),
+		},
+	}
+	daemonSessionStore.mu.Unlock()
+	defer func() {
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data = oldStore
+		daemonSessionStore.mu.Unlock()
+	}()
+
+	agent := &recordingAskAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-session-memory-guidance","mode":"plan","message":"Prepare the next step","hq":{"user_id":"user-guidance","session_id":"continue-session-memory-guidance"},"workspace":{"root":".","active_file":"docs/notes.md"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload")
+	}
+	memoryContext, ok := payload.Variables["continue_execution_memory_context"].([]string)
+	if !ok || len(memoryContext) != 1 || !strings.Contains(memoryContext[0], "keep the validation note") {
+		t.Fatalf("expected stored execution memory brief in guidance, got %#v", payload.Variables["continue_execution_memory_context"])
+	}
+}
+
+func TestContinueChatHandlerStoresTeamPracticeInTeamPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{StoresFolders: []string{tmpDir}, CacheType: sop.InMemory})
+	copilotAgent := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, sysDB)
+	copilotAgent.Memory = memory.NewMemoryUnit("continue-agent")
+	serviceRuntime := sharedagent.NewService(nil, sysDB, nil, &continueTeamPracticeMockGenerator{}, nil, map[string]ai.Agent[map[string]any]{"copilot": copilotAgent}, false)
+	service := &localRAGService{service: serviceRuntime}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-team-practice","mode":"plan","message":"team practice: preserve public interfaces and add targeted tests","hq":{"user_id":"user-team-practice","session_id":"continue-team-practice"},"workspace":{"root":".","active_file":"docs/notes.md"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Team Patterns/Continue/Memory") {
+		t.Fatalf("unexpected streamed response body: %q", body)
+	}
+
+	readTx, err := sysDB.BeginTransaction(context.Background(), sop.ForReading)
+	if err != nil {
+		t.Fatalf("begin read transaction: %v", err)
+	}
+	defer readTx.Rollback(context.Background())
+	ltm, err := sysDB.OpenKnowledgeBase(context.Background(), copilotAgent.Memory.LongTermMemoryName(), readTx, nil, nil, false, true)
+	if err != nil {
+		t.Fatalf("open ltm: %v", err)
+	}
+	count, err := ltm.Store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("store count failed: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("expected stored team pattern item")
+	}
+	catsByPath, err := ltm.Store.CategoriesByPath(context.Background())
+	if err != nil {
+		t.Fatalf("categories by path failed: %v", err)
+	}
+	found, err := catsByPath.Find(context.Background(), "Team Patterns/Continue/Memory", false)
+	if err != nil {
+		t.Fatalf("category lookup failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected Team Patterns/Continue/Memory category to exist")
+	}
+}
+
 func TestAutoProvisionSharedCopilotServiceUsesBackendLoadedAgents(t *testing.T) {
 	oldAgents := sopbackend.GetLoadedAgents()
 	defer sopbackend.SetLoadedAgents(oldAgents)
@@ -4424,9 +4764,11 @@ func TestHandleUIHandoffAllowsMissingAuthTokensForLocalRuntime(t *testing.T) {
 }
 
 type recordingAskAgent struct {
-	response string
-	guidance sharedagent.ContinueDelegationGuidance
-	calls    []struct {
+	response       string
+	guidance       sharedagent.ContinueDelegationGuidance
+	kbGuidance     sharedagent.ContinueDelegationGuidance
+	memoryGuidance sharedagent.ContinueDelegationGuidance
+	calls          []struct {
 		ctx context.Context
 		cfg *ai.ConfigMap
 	}
@@ -4454,6 +4796,22 @@ func (a *recordingAskAgent) BuildContinueDelegationGuidance(ctx context.Context,
 	_ = requestedPhase
 	_ = variables
 	return a.guidance, nil
+}
+
+func (a *recordingAskAgent) BuildContinueKnowledgeBaseGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (sharedagent.ContinueDelegationGuidance, error) {
+	_ = ctx
+	_ = query
+	_ = requestedPhase
+	_ = variables
+	return a.kbGuidance, nil
+}
+
+func (a *recordingAskAgent) BuildContinueMemoryGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (sharedagent.ContinueDelegationGuidance, error) {
+	_ = ctx
+	_ = query
+	_ = requestedPhase
+	_ = variables
+	return a.memoryGuidance, nil
 }
 
 func TestLocalRAGAskUsesShellFallbackForSimpleCommands(t *testing.T) {

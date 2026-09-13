@@ -191,6 +191,10 @@ func (um *UndoManager) BeginTransaction(ctx context.Context, description string,
 
 // BackupFile creates a backup of a file before modification.
 func (um *UndoManager) BackupFile(ctx context.Context, filePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	um.mu.Lock()
 	defer um.mu.Unlock()
 
@@ -418,16 +422,18 @@ func (um *UndoManager) storeInSpace(ctx context.Context, txn *WorkflowTransactio
 	itemsToStore := []SpaceItem{}
 
 	// Transaction-level workstream record for undo history review.
+	modifiedFilesJSON, _ := json.Marshal(txn.ModifiedFiles)
 	itemsToStore = append(itemsToStore, SpaceItem{
 		ID:      txn.ID,
 		Title:   txn.Description,
 		Content: txn.SearchableContent,
 		Metadata: map[string]interface{}{
-			"kind":          "workstream",
-			"repo_name":     repoName,
-			"txn_id":        txn.ID,
-			"workflow_type": txn.WorkflowType,
-			"status":        txn.Status,
+			"kind":           "workstream",
+			"repo_name":      repoName,
+			"txn_id":         txn.ID,
+			"workflow_type":  txn.WorkflowType,
+			"status":         txn.Status,
+			"modified_files": string(modifiedFilesJSON),
 		},
 		CategoryPath: []string{"Coding Workflows", repoName, "Transactions"},
 	})

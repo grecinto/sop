@@ -694,6 +694,14 @@ type continueGuidanceProvider interface {
 	BuildContinueDelegationGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (agent.ContinueDelegationGuidance, error)
 }
 
+type continueKnowledgeBaseGuidanceProvider interface {
+	BuildContinueKnowledgeBaseGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (agent.ContinueDelegationGuidance, error)
+}
+
+type continueMemoryGuidanceProvider interface {
+	BuildContinueMemoryGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (agent.ContinueDelegationGuidance, error)
+}
+
 func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRequest, eventStreamer func(string, any)) (string, error) {
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -772,16 +780,120 @@ func (s *localRAGService) enrichContinueGuidanceVariables(ctx context.Context, q
 	if s == nil || s.service == nil || len(variables) == 0 {
 		return
 	}
-	provider, ok := s.service.(continueGuidanceProvider)
-	if !ok {
-		return
-	}
 	requestedPhase, _ := variables["requested_phase"].(string)
-	guidance, err := provider.BuildContinueDelegationGuidance(ctx, query, requestedPhase, variables)
-	if err != nil {
-		return
+	merged := agent.ContinueDelegationGuidance{}
+	if provider, ok := s.service.(continueGuidanceProvider); ok {
+		if guidance, err := provider.BuildContinueDelegationGuidance(ctx, query, requestedPhase, variables); err == nil {
+			merged = mergeContinueDelegationGuidance(merged, guidance)
+		}
 	}
-	applyContinueGuidanceVariables(variables, guidance)
+	if provider, ok := s.service.(continueKnowledgeBaseGuidanceProvider); ok {
+		if guidance, err := provider.BuildContinueKnowledgeBaseGuidance(ctx, query, requestedPhase, variables); err == nil {
+			merged = mergeContinueDelegationGuidance(merged, guidance)
+		}
+	}
+	if provider, ok := s.service.(continueMemoryGuidanceProvider); ok {
+		if guidance, err := provider.BuildContinueMemoryGuidance(ctx, query, requestedPhase, variables); err == nil {
+			merged = mergeContinueDelegationGuidance(merged, guidance)
+		}
+	}
+	if guidance := s.buildContinueExecutionMemoryGuidance(ctx, query, requestedPhase, variables); len(guidance.TeamPractices) > 0 || len(guidance.ReferenceContext) > 0 || len(guidance.ImplementationNotes) > 0 {
+		merged = mergeContinueDelegationGuidance(merged, guidance)
+	}
+	applyContinueGuidanceVariables(variables, merged)
+}
+
+func (s *localRAGService) buildContinueExecutionMemoryGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) agent.ContinueDelegationGuidance {
+	if s == nil {
+		return agent.ContinueDelegationGuidance{}
+	}
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil {
+		return agent.ContinueDelegationGuidance{}
+	}
+	sessionKey := continueSessionContextKey(payload.SessionID, "", payload.UserID)
+	if strings.TrimSpace(sessionKey) == "" {
+		return agent.ContinueDelegationGuidance{}
+	}
+	daemonSessionStore.mu.Lock()
+	stored, ok := daemonSessionStore.data[sessionKey]
+	daemonSessionStore.mu.Unlock()
+	if !ok || strings.TrimSpace(stored.ContinueMemorySummary) == "" {
+		return agent.ContinueDelegationGuidance{}
+	}
+	brief := strings.TrimSpace(stored.ContinueMemorySummary)
+	return agent.ContinueDelegationGuidance{
+		TeamPractices: []string{
+			"Preserve the last recorded Continue execution memory brief when starting the next coding turn.",
+			"Carry forward the prior Continue outcome, validation, and file-change summary before making new edits.",
+		},
+		SuccessCriteria: []string{
+			"Use the previous Continue execution brief when it is relevant to the current coding objective.",
+		},
+		Constraints: []string{
+			"Do not discard the recorded Continue memory brief when preparing the next turn.",
+		},
+		ImplementationNotes:  []string{brief},
+		ExpectedResultFormat: "structured_execution_result",
+		ReferenceContext: []agent.ContinueDelegationReference{{
+			Kind:    "continue_execution_memory",
+			Source:  "daemon_session_store",
+			Title:   "Continue execution memory brief",
+			Content: brief,
+			Metadata: map[string]any{
+				"query":                         strings.TrimSpace(query),
+				"requested_phase":               strings.TrimSpace(requestedPhase),
+				"continue_memory_updated_at_ms": stored.ContinueMemoryUpdatedAtMS,
+			},
+		}},
+		Metadata: map[string]any{
+			"source": "continue_execution_memory",
+		},
+	}
+}
+
+func mergeContinueDelegationGuidance(base, overlay agent.ContinueDelegationGuidance) agent.ContinueDelegationGuidance {
+	if len(overlay.TeamPractices) > 0 {
+		base.TeamPractices = append(base.TeamPractices, overlay.TeamPractices...)
+	}
+	if len(overlay.SuccessCriteria) > 0 {
+		base.SuccessCriteria = append(base.SuccessCriteria, overlay.SuccessCriteria...)
+	}
+	if len(overlay.Constraints) > 0 {
+		base.Constraints = append(base.Constraints, overlay.Constraints...)
+	}
+	if len(overlay.ImplementationNotes) > 0 {
+		base.ImplementationNotes = append(base.ImplementationNotes, overlay.ImplementationNotes...)
+	}
+	if strings.TrimSpace(overlay.ExpectedResultFormat) != "" {
+		base.ExpectedResultFormat = strings.TrimSpace(overlay.ExpectedResultFormat)
+	}
+	if len(overlay.ReferenceContext) > 0 {
+		base.ReferenceContext = append(base.ReferenceContext, overlay.ReferenceContext...)
+	}
+	if len(overlay.Metadata) > 0 {
+		if base.Metadata == nil {
+			base.Metadata = map[string]any{}
+		}
+		if source, ok := overlay.Metadata["source"].(string); ok && strings.TrimSpace(source) != "" {
+			source = strings.TrimSpace(source)
+			if existing, ok := base.Metadata["sources"].([]string); ok {
+				base.Metadata["sources"] = appendUniqueStrings(existing, source)
+			} else {
+				base.Metadata["sources"] = appendUniqueStrings(nil, source)
+			}
+			if _, ok := base.Metadata["source"].(string); !ok || strings.TrimSpace(base.Metadata["source"].(string)) == "" {
+				base.Metadata["source"] = source
+			}
+		}
+		for key, value := range overlay.Metadata {
+			if key == "source" {
+				continue
+			}
+			base.Metadata[key] = value
+		}
+	}
+	return base
 }
 
 func applyContinueGuidanceVariables(variables map[string]any, guidance agent.ContinueDelegationGuidance) {
@@ -814,6 +926,9 @@ func applyContinueGuidanceVariables(variables map[string]any, guidance agent.Con
 		}
 		variables["continue_reference_context"] = refs
 	}
+	if len(guidance.ImplementationNotes) > 0 {
+		variables["continue_execution_memory_context"] = append([]string(nil), guidance.ImplementationNotes...)
+	}
 	if len(guidance.Metadata) > 0 {
 		variables["continue_guidance_metadata"] = cloneBridgeVariables(guidance.Metadata)
 	}
@@ -826,6 +941,7 @@ func clearContinueGuidanceVariables(variables map[string]any) {
 	delete(variables, "continue_implementation_notes")
 	delete(variables, "continue_expected_result_format")
 	delete(variables, "continue_reference_context")
+	delete(variables, "continue_execution_memory_context")
 	delete(variables, "continue_guidance_metadata")
 }
 
@@ -897,27 +1013,88 @@ func (s *localRAGService) storeContinueSessionContext(req continueChatRequest) {
 		req.LLMPoolUpdatedBy,
 	)
 	daemonSessionStore.data[sessionKey] = daemonSessionContext{
-		AccessToken:        firstNonEmpty(accessToken, storedSessionContext.AccessToken),
-		RefreshToken:       firstNonEmpty(refreshToken, storedSessionContext.RefreshToken),
-		HQBaseURL:          firstNonEmpty(hqBaseURL, storedSessionContext.HQBaseURL),
-		HQPort:             firstNonEmpty(hqPort, storedSessionContext.HQPort),
-		HQUserID:           firstNonEmpty(req.HQ.UserID, storedSessionContext.HQUserID),
-		HQSessionID:        firstNonEmpty(req.HQ.SessionID, storedSessionContext.HQSessionID),
-		LLMProvider:        firstNonEmpty(req.Provider, storedSessionContext.LLMProvider),
-		LLMAPIKey:          firstNonEmpty(req.APIKey, storedSessionContext.LLMAPIKey),
-		LLMModel:           firstNonEmpty(req.Model, storedSessionContext.LLMModel),
-		LLMURL:             firstNonEmpty(req.URL, storedSessionContext.LLMURL),
-		LLMCredentials:     cloneLLMCredentialsMap(mergedCredentials),
-		LLMPoolVersion:     mergedPoolVersion,
-		LLMPoolUpdatedAtMS: mergedPoolUpdatedAtMS,
-		LLMPoolUpdatedBy:   mergedPoolUpdatedBy,
-		ThinkingLevel:      storedSessionContext.ThinkingLevel,
-		LastUpdated:        time.Now().UTC(),
+		AccessToken:               firstNonEmpty(accessToken, storedSessionContext.AccessToken),
+		RefreshToken:              firstNonEmpty(refreshToken, storedSessionContext.RefreshToken),
+		HQBaseURL:                 firstNonEmpty(hqBaseURL, storedSessionContext.HQBaseURL),
+		HQPort:                    firstNonEmpty(hqPort, storedSessionContext.HQPort),
+		HQUserID:                  firstNonEmpty(req.HQ.UserID, storedSessionContext.HQUserID),
+		HQSessionID:               firstNonEmpty(req.HQ.SessionID, storedSessionContext.HQSessionID),
+		LLMProvider:               firstNonEmpty(req.Provider, storedSessionContext.LLMProvider),
+		LLMAPIKey:                 firstNonEmpty(req.APIKey, storedSessionContext.LLMAPIKey),
+		LLMModel:                  firstNonEmpty(req.Model, storedSessionContext.LLMModel),
+		LLMURL:                    firstNonEmpty(req.URL, storedSessionContext.LLMURL),
+		LLMCredentials:            cloneLLMCredentialsMap(mergedCredentials),
+		LLMPoolVersion:            mergedPoolVersion,
+		LLMPoolUpdatedAtMS:        mergedPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:          mergedPoolUpdatedBy,
+		ThinkingLevel:             storedSessionContext.ThinkingLevel,
+		ContinueMemorySummary:     storedSessionContext.ContinueMemorySummary,
+		ContinueMemoryUpdatedAtMS: storedSessionContext.ContinueMemoryUpdatedAtMS,
+		LastUpdated:               time.Now().UTC(),
 	}
 	daemonSessionStore.mu.Unlock()
 	if err := persistDaemonLLMPoolState(); err != nil {
 		log.Printf("Warning: failed to persist daemon LLM pool state from Continue context sync: %v", err)
 	}
+}
+
+func (s *localRAGService) maybeStoreContinueTeamPractice(ctx context.Context, message string) (bool, string, error) {
+	practice, ok := extractContinueTeamPracticeContent(message)
+	if !ok {
+		return false, "", nil
+	}
+	if strings.TrimSpace(practice) == "" {
+		return true, "", fmt.Errorf("team practice content is required")
+	}
+	agentSvc := s.continueTeamPracticeAgent()
+	if agentSvc == nil {
+		return true, "", fmt.Errorf("continue team practice storage is unavailable")
+	}
+	pattern, err := agentSvc.StoreContinueTeamPractice(ctx, practice)
+	if err != nil {
+		return true, "", err
+	}
+	return true, fmt.Sprintf("Stored team practice in %s.", pattern.BuildCategoryPath()), nil
+}
+
+func (s *localRAGService) continueTeamPracticeAgent() *agent.CopilotAgent {
+	if s != nil {
+		if provider, ok := s.service.(interface {
+			RegisteredAgent(string) ai.Agent[map[string]any]
+		}); ok {
+			if copilotAgent, ok := provider.RegisteredAgent("copilot").(*agent.CopilotAgent); ok {
+				return copilotAgent
+			}
+		}
+		if copilotAgent, ok := s.service.(*agent.CopilotAgent); ok {
+			return copilotAgent
+		}
+	}
+	for _, loaded := range sopbackend.GetLoadedAgents() {
+		if copilotAgent, ok := loaded.(*agent.CopilotAgent); ok {
+			return copilotAgent
+		}
+	}
+	return nil
+}
+
+func extractContinueTeamPracticeContent(message string) (string, bool) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"team best practice", "team practice"} {
+		if lower == prefix {
+			return "", true
+		}
+		if strings.HasPrefix(lower, prefix) {
+			content := strings.TrimSpace(trimmed[len(prefix):])
+			content = strings.TrimLeft(content, ":-—– \t\r\n")
+			return content, true
+		}
+	}
+	return "", false
 }
 
 func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Request, toolName string) {
@@ -1521,22 +1698,24 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		daemonSessionStore.mu.Lock()
 		daemonSessionStore.data[ctxKey] = daemonSessionContext{
-			AccessToken:        accessToken,
-			RefreshToken:       refreshToken,
-			HQBaseURL:          hqBaseURL,
-			HQPort:             hqPort,
-			HQUserID:           strings.TrimSpace(req.HQ.UserID),
-			HQSessionID:        payload.SessionID,
-			LLMProvider:        nextProvider,
-			LLMAPIKey:          nextAPIKey,
-			LLMModel:           nextModel,
-			LLMURL:             nextURL,
-			LLMCredentials:     cloneLLMCredentialsMap(selectedCredentials),
-			LLMPoolVersion:     selectedPoolVersion,
-			LLMPoolUpdatedAtMS: selectedPoolUpdatedAtMS,
-			LLMPoolUpdatedBy:   selectedPoolUpdatedBy,
-			ThinkingLevel:      strings.TrimSpace(storedSessionContext.ThinkingLevel),
-			LastUpdated:        time.Now().UTC(),
+			AccessToken:               accessToken,
+			RefreshToken:              refreshToken,
+			HQBaseURL:                 hqBaseURL,
+			HQPort:                    hqPort,
+			HQUserID:                  strings.TrimSpace(req.HQ.UserID),
+			HQSessionID:               payload.SessionID,
+			LLMProvider:               nextProvider,
+			LLMAPIKey:                 nextAPIKey,
+			LLMModel:                  nextModel,
+			LLMURL:                    nextURL,
+			LLMCredentials:            cloneLLMCredentialsMap(selectedCredentials),
+			LLMPoolVersion:            selectedPoolVersion,
+			LLMPoolUpdatedAtMS:        selectedPoolUpdatedAtMS,
+			LLMPoolUpdatedBy:          selectedPoolUpdatedBy,
+			ThinkingLevel:             strings.TrimSpace(storedSessionContext.ThinkingLevel),
+			ContinueMemorySummary:     storedSessionContext.ContinueMemorySummary,
+			ContinueMemoryUpdatedAtMS: storedSessionContext.ContinueMemoryUpdatedAtMS,
+			LastUpdated:               time.Now().UTC(),
 		}
 		daemonSessionStore.mu.Unlock()
 		if err := persistDaemonLLMPoolState(); err != nil {

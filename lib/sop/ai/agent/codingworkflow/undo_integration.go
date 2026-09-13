@@ -22,10 +22,9 @@ func NewUndoAwarePatchEngine(base PatchEngine, undoManager *UndoManager) *UndoAw
 }
 
 // Apply applies a patch while automatically backing up the file.
-func (u *UndoAwarePatchEngine) Apply(task Task, patch *Patch, state RunState) error {
+func (u *UndoAwarePatchEngine) Apply(ctx context.Context, task Task, patch *Patch, state RunState) error {
 	// Backup file BEFORE applying patch
 	if u.undoManager != nil && patch != nil && patch.FilePath != "" {
-		ctx := context.Background()
 		if err := u.undoManager.BackupFile(ctx, patch.FilePath); err != nil {
 			// Log error but continue - backup is best-effort
 			// TODO: Add proper logging
@@ -34,7 +33,7 @@ func (u *UndoAwarePatchEngine) Apply(task Task, patch *Patch, state RunState) er
 	}
 
 	// Apply patch using base implementation
-	return u.base.Apply(task, patch, state)
+	return u.base.Apply(ctx, task, patch, state)
 }
 
 // WorkflowManagerWithUndo wraps WorkflowManager to add undo transaction management.

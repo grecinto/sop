@@ -1,25 +1,25 @@
 # Continue Native Transport Implementation Plan
 
-**Status**: Completed for the implemented transport rollout; remaining work is refactoring the coding workflow behind a swappable backend interface and wiring Continue as the shipping implementation.
+**Status**: Continue owns the coding workflow execution loop; AI Studio remains the recorder, memory owner, and history ledger.
 
 ## Goal
 
-Define a small coding-workflow backend API that AI Studio owns, then implement it first with Continue and later with the daemon.
+Define a small coding-workflow backend API that Continue owns, while AI Studio keeps the prompt ledger, undo history, memory, KnowledgeBase guidance, and policy record.
 
-Design goal: keep the Continue integration thin and reuse Continue's own editor-side AST/tree-sitter, file navigation, search, and local execution capabilities instead of reimplementing them in the daemon.
+The daemon should own the prompt service, run ledger, and workflow record; Continue should own the editor-native coding workflow execution substrate and solve the coding task end to end.
 
-The daemon should own the prompt service, run ledger, and workflow record; Continue should own the editor-native execution substrate.
-
-The shipping configuration should use Continue as the execution backend. The daemon implementation remains a future backend, not the primary path.
+The shipping configuration should use Continue as the execution backend and workflow owner. The daemon implementation remains a future backend, not the primary path.
 
 The integration target is the native Continue transport already implemented under `/api/continue/*`, with explicit provider/model attributes on each request and structured change-history results for AI Studio to record.
+
+Continue should not be described as a file-edit helper only. It is the execution engine for the prompt: investigation, implementation, test fixing, and the use of its own AST/tree-sitter, navigation, and IDE-native tools.
 
 ## Non-Goals
 
 - Do not restore daemon-as-OpenAI transport.
 - Do not add `/v1/chat/completions`, `/v1/models`, or `/api/continue/config` back as canonical surfaces.
-- Do not let Continue become the workflow controller.
-- Do not move workflow state, approvals, or memory ownership into the editor client.
+- Do not let Continue become the workflow controller for the broader platform.
+- Do not move workflow state, approvals, KnowledgeBase ownership, or memory ownership into the editor client.
 - Do not rebuild Continue's internal AST/tree-sitter, search, navigation, or edit loops inside the daemon bridge.
 
 ## Anti-Drift Rule
@@ -194,7 +194,7 @@ Token-efficiency planning for Continue-originated requests is documented in [doc
 - extract the coding workflow contract behind a small backend interface rather than spreading investigation/test-fix logic across daemon handlers
 - implement the Continue backend first so the shipping path owns investigation, patching, validation, and structured result emission
 - keep the daemon backend as a future implementation that can be turned on by configuration without changing the prompt service contract
-- ensure the AI Studio prompt ledger stores the structured result, including file diff history and undo references, as the source of truth for visible change history
+- ensure the AI Studio prompt ledger stores the structured result, including file diff history, undo references, and knowledge/memory references, as the source of truth for visible change history
 
 ### 2. Continue client wiring and workflow shaping
 

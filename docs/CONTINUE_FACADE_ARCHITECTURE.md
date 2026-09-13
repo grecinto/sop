@@ -4,7 +4,7 @@
 
 ## Summary
 
-Continue is the IDE surface and the preferred execution backend. AI Studio and the daemon remain the controller.
+Continue is the IDE surface and the preferred execution backend. Continue owns the coding workflow execution loop, while AI Studio and the daemon remain thin recorders and policy/memory owners.
 
 Design goal: keep the bridge thin and reuse Continue's own AST/tree-sitter, editor context, search, navigation, and local execution primitives rather than reimplementing them in the daemon.
 
@@ -20,7 +20,9 @@ The capability stack therefore looks like this:
 
 For SDK reuse, the same Ask runtime can also be mounted in reverse as a participant under another controller. That does not change the internal rule above for the default Continue bridge. It adds a second supported boundary: another agent may call SOP Ask as a delegated worker while SOP Ask still controls its own inner capability pipeline.
 
-Continue can contribute editor context, diff-aware execution, and local workflow affordances, but it does not own orchestration, memory, approvals, or long-running workflow state.
+Continue can contribute editor context, diff-aware execution, and local workflow affordances. For the coding workflow itself, Continue owns orchestration inside the delegated execution slice, including investigation, test fixing, and feature implementation using its internal AST/tree-sitter and editor-native tools. AI Studio retains durable memory, KnowledgeBase guidance, approvals, and visible history recording.
+
+In practical terms, Continue should be able to take a prompt and complete the coding workflow end to end, then return structured file diffs, deltas, and execution metadata to AI Studio for persistence and undo/history tracking.
 
 The implementation boundary should be a small backend API that can be swapped between Continue and the daemon without changing the controller contract.
 
@@ -36,20 +38,22 @@ In practice, that means:
 - coding workflow remains a domain capability with its own phase logic and repository-aware behavior
 - desktop remains a domain capability with OS and shell automation behavior
 - Continue is an IDE bridge capability that exposes one bounded local execution channel for editor-native tasks
-- the daemon Ask loop remains the single controller for workflow progression, unification, and memory
+- the daemon Ask loop remains the controller for AI Studio-facing orchestration, unification, and durable memory, while Continue owns the delegated coding workflow loop
 
 This keeps the architecture aligned with the project’s intent: a capability-pluggable design system where specialists can be added without rewriting the controller or the core orchestration model.
 
+For the detailed behavior and interface contract, see [CONTINUE_COPILOT_INTEGRATION_CONTRACT.md](CONTINUE_COPILOT_INTEGRATION_CONTRACT.md).
+
 ## LLM interaction contract
 
-The relevant lesson from Continue is not about replacing the orchestration model. It is about tightening how the LLM behaves during a delegated or local execution turn.
+The relevant lesson from Continue is not about replacing the orchestration model. It is about letting Continue own the delegated coding workflow turn while keeping AI Studio responsible for prompt capture, memory, approvals, and visible history.
 
 The interaction contract for the Ask/ReAct system should therefore be:
 
-- Ask remains the controller of workflow progression, memory, and phase transitions.
+- Ask remains the controller of platform-level workflow progression, memory, and phase transitions, but the coding workflow execution inside the delegated slice is owned by Continue.
 - Capabilities remain passive participants that classify tasks, inject context, expose tools, and return bounded work.
 - General, domain, and bridge capabilities each contribute within their own scope; they do not bypass the Ask loop.
-- A delegated IDE worker such as Continue participates only through an explicit bounded tool or participant boundary.
+- A delegated IDE worker such as Continue participates through an explicit bounded tool or participant boundary and owns the coding workflow inside that boundary.
 - Before editing, the LLM must state the immediate objective and the expected scope in one sentence.
 - Prefer the smallest valid change over a broad rewrite; do not expand scope unless the task requires it.
 - If a task is multi-step, sequence it through the Ask workflow rather than collapsing it into one uncontrolled loop.
@@ -58,7 +62,7 @@ The interaction contract for the Ask/ReAct system should therefore be:
 - Validate with the smallest relevant command or check that exercises the changed behavior.
 - If a sub-task is editor-native or IDE-specific, delegate it to the bridge capability and return a result that the outer workflow can continue from.
 
-This is the practical adaptation of Continue’s strengths: better local execution discipline, bounded steps, and a clearer delegation contract, while retaining our stronger orchestration-first architecture.
+This is the practical adaptation of Continue’s strengths: better local execution discipline, bounded steps, and ownership of the coding workflow loop, while retaining AI Studio’s stronger orchestration, memory, and history recording.
 
 ## AST vs. Continue semantic layer
 
@@ -72,11 +76,10 @@ Continue is the intended IDE-native bridge for richer semantic actions once the 
 
 ## Control Boundary
 
-### Daemon responsibilities
+### AI Studio and daemon responsibilities
 
-- Ask/ReAct orchestration
+- Ask/ReAct orchestration around the coding workflow
 - provider routing decisions
-- workflow phase progression
 - approvals and policy rails
 - session continuity and durable state
 - prompt servicing, prompt ledger, and visible change-history storage
@@ -87,7 +90,8 @@ Continue is the intended IDE-native bridge for richer semantic actions once the 
 
 - chat and editor interaction surface inside VS Code
 - active file, selection, and open-file context
-- editor-aware execution when explicitly delegated
+- editor-aware coding workflow execution when explicitly delegated
+- prompt-level coding workflow execution, including investigation, test fixing, and feature implementation when explicitly delegated
 - worker capability advertisement and callback handling
 - structured file-change reporting for history and undo cards
 
@@ -131,7 +135,9 @@ Key transport properties:
 - daemon-owned metadata declares AI Studio as controller and Continue as editor worker
 - daemon-owned metadata declares the authoritative AI Studio provider/model catalog through `control_model.supported_llms`
 
-The worker-facing result contract should remain structured enough for AI Studio to render a complete history entry. At minimum, the returned result should include modified files, diff summaries, change identifiers, optional undo references, and validation metadata.
+The worker-facing result contract should remain structured enough for AI Studio to render a complete history entry. At minimum, the returned result should include modified files, diff summaries, change identifiers, optional undo references, validation metadata, and any knowledge or memory references needed to reconstruct the reasoning trail.
+
+AI Studio is the place where KnowledgeBase, memory tracking, prompt recording, and undo history live. Continue is the place where the coding work itself is performed.
 
 ## Ask-Side Abstraction
 
@@ -180,7 +186,7 @@ This keeps the architecture coherent:
 The target Ask-side shape is a Continue-specific LAO participant, not a mirrored tool catalog.
 
 - capability role: supporting participant for IDE-native coding execution
-- primary responsibility: tell the daemon LLM when and how to delegate one bounded coding objective to Continue
+- primary responsibility: tell the daemon LLM when and how to delegate one bounded coding objective to Continue, which then owns that coding workflow slice
 - exposed tool count: one
 
 Recommended tool shape:

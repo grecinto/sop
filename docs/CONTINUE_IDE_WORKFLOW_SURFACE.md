@@ -6,14 +6,19 @@
 
 This document captures the actual Continue IDE-side coding workflow surface that AI Studio from Northstar AI can rely on today, the architectural boundary between AI Studio and Continue, and the remaining gaps between a strong engineering loop and broader SDLC coverage.
 
-Design goal: preserve Continue as the reusable editor-native copilot substrate, and keep the AI Studio/daemon side thin so it orchestrates and records rather than re-implementing Continue internals.
+Design goal: preserve Continue as the reusable editor-native copilot substrate and owner of the coding workflow loop, while keeping the AI Studio/daemon side thin so it records and routes rather than re-implementing Continue internals.
+
+Continue should be able to serve a prompt end to end, not just expose single actions. That means investigation, test repair, and feature implementation should happen inside Continue's own workflow loop, using its AST/tree-sitter, navigation, editor context, and local execution tools.
+
+AI Studio then receives the structured file diffs, execution metadata, and reasoning breadcrumbs it needs to maintain KnowledgeBase guidance, memory tracking, prompt history, and undo history.
 
 Core conclusion:
 
 - Continue is currently the strongest open-source substrate in this stack for coding workflows and IDE integration.
-- AI Studio should remain the controller.
-- Continue should remain the editor-facing execution surface and delegated worker.
-- The right strategy is to surface the highest-value Continue IDE capabilities first, then layer AI Studio workflow control and SDLC-specific orchestration above them.
+- AI Studio should remain the recorder, router, and durable history owner.
+- Continue should remain the editor-facing execution surface and delegated coding workflow owner.
+- Continue is not limited to file edits; it is expected to investigate, patch, validate, and iterate until the prompt's coding objective is satisfied.
+- The right strategy is to surface the highest-value Continue IDE capabilities first, then layer AI Studio recording, memory, and SDLC-specific orchestration around them.
 - The daemon should expose Continue capabilities as data: supported phases, phase modes, and each phase's available tools.
 
 ## Current implementation posture
@@ -26,14 +31,16 @@ The current implementation is now aligned with an Ask2Ask-style integration post
 - Continue remembers its HQ and daemon auth state across editor restarts through VS Code secret storage and rehydrates it on startup.
 - The active workflow backend should be selectable, with `continue` as the shipping implementation and `daemon` as the deferred fallback implementation.
 
+For the full behavior and interface contract, including preflight recall and STM/LTM memory flow, see [CONTINUE_COPILOT_INTEGRATION_CONTRACT.md](CONTINUE_COPILOT_INTEGRATION_CONTRACT.md).
+
 ## Control Boundary
 
 The control boundary does not change as the tool surface grows.
 
 - Ask/ReAct remains the only controller.
-- AI Studio and the daemon own orchestration, approvals, memory, workflow state, fallback behavior, and phase progression.
-- Continue contributes editor context, local IDE affordances, and bounded delegated execution.
-- Continue must not become a controller that runs multi-step workflows on its own.
+- AI Studio and the daemon own orchestration, approvals, KnowledgeBase guidance, memory, visible history, fallback behavior, and phase progression.
+- Continue contributes editor context, local IDE affordances, and bounded delegated execution, and owns the coding workflow loop inside that boundary.
+- Continue must not become a controller for the broader platform, but it does own the multi-step coding workflow inside its delegated execution boundary.
 
 This keeps the integration aligned with the participant pattern already used across the codebase.
 

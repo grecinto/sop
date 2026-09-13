@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -269,6 +272,98 @@ type continueBridgeWorkerStore struct {
 	workers map[string]continueWorkerRegistration
 }
 
+type continueUndoSpaceClient struct {
+	mu    sync.Mutex
+	items map[string][]codingworkflow.SpaceItem
+}
+
+func newContinueUndoSpaceClient() *continueUndoSpaceClient {
+	return &continueUndoSpaceClient{items: make(map[string][]codingworkflow.SpaceItem)}
+}
+
+func getContinueUndoSpaceClient(key string) *continueUndoSpaceClient {
+	continueUndoSpaceRegistryMu.RLock()
+	if client, ok := continueUndoSpaceRegistry[key]; ok {
+		continueUndoSpaceRegistryMu.RUnlock()
+		return client
+	}
+	continueUndoSpaceRegistryMu.RUnlock()
+
+	continueUndoSpaceRegistryMu.Lock()
+	defer continueUndoSpaceRegistryMu.Unlock()
+	if client, ok := continueUndoSpaceRegistry[key]; ok {
+		return client
+	}
+	client := newContinueUndoSpaceClient()
+	continueUndoSpaceRegistry[key] = client
+	return client
+}
+
+func (c *continueUndoSpaceClient) ensureSpace(spaceID string) {
+	if c.items == nil {
+		c.items = make(map[string][]codingworkflow.SpaceItem)
+	}
+	if _, ok := c.items[spaceID]; !ok {
+		c.items[spaceID] = nil
+	}
+}
+
+func (c *continueUndoSpaceClient) CreateSpace(ctx context.Context, req codingworkflow.SpaceCreateRequest) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureSpace(req.Name)
+	return nil
+}
+func (c *continueUndoSpaceClient) AddItem(ctx context.Context, spaceID string, item codingworkflow.SpaceItem) error {
+	return c.AddItemToCategory(ctx, spaceID, item.CategoryPath, item)
+}
+func (c *continueUndoSpaceClient) AddItemToCategory(ctx context.Context, spaceID string, categoryPath []string, item codingworkflow.SpaceItem) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureSpace(spaceID)
+	if item.CategoryPath == nil {
+		item.CategoryPath = append([]string(nil), categoryPath...)
+	}
+	c.items[spaceID] = append(c.items[spaceID], item)
+	return nil
+}
+func (c *continueUndoSpaceClient) SemanticSearch(ctx context.Context, req codingworkflow.SpaceSearchRequest) ([]codingworkflow.SpaceItem, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	items := make([]codingworkflow.SpaceItem, 0, len(c.items[req.SpaceID]))
+	for _, item := range c.items[req.SpaceID] {
+		if req.Query == "" || strings.Contains(strings.ToLower(item.Content), strings.ToLower(req.Query)) || strings.Contains(strings.ToLower(item.Title), strings.ToLower(req.Query)) {
+			items = append(items, item)
+		}
+	}
+	if req.TopK > 0 && len(items) > req.TopK {
+		items = items[:req.TopK]
+	}
+	return items, nil
+}
+func (c *continueUndoSpaceClient) GetItem(ctx context.Context, spaceID string, itemID string) (*codingworkflow.SpaceItem, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, item := range c.items[spaceID] {
+		if item.ID == itemID {
+			copyItem := item
+			return &copyItem, nil
+		}
+	}
+	return nil, nil
+}
+func (c *continueUndoSpaceClient) DeleteItem(ctx context.Context, spaceID string, itemID string) error {
+	return nil
+}
+func (c *continueUndoSpaceClient) EnableFederation(ctx context.Context, spaceID string, userID string) error {
+	return nil
+}
+
+var continueUndoSpaceRegistryMu sync.RWMutex
+var continueUndoSpaceRegistry = map[string]*continueUndoSpaceClient{}
+var continueUndoManagerCache = make(map[string]*codingworkflow.UndoManager)
+var continueUndoManagerCacheMu sync.RWMutex
+
 var continueWorkerCapabilityCatalog = []string{"read_context", "apply_patch", "edit_code", "diff_review", "plan_changes"}
 
 const continueWorkerRawBodyLimit = 64 * 1024
@@ -471,6 +566,20 @@ func (s *localRAGService) handleBridgeChat(w http.ResponseWriter, r *http.Reques
 	envelope, err := transport.DecodeChatRequest(r)
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if handled, answer, err := s.maybeStoreContinueTeamPractice(r.Context(), envelope.Ask.UserPrompt); handled {
+		if err != nil {
+			respondJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		if envelope.Stream {
+			sendEvent, _ := sopbackend.SetupStream(w)
+			sendEvent("content", answer)
+			sendEvent("done", nil)
+			return
+		}
+		transport.WriteChatResponse(w, envelope, answer)
 		return
 	}
 
@@ -941,6 +1050,12 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 			status := "completed"
 			if outcome.StatusCode >= 400 {
 				status = "failed"
+			}
+			if err := recordContinueDelegatedUndoTransaction(r.Context(), req, outcome.FinalResult); err != nil {
+				log.Printf("continue delegated undo ledger: %v", err)
+			}
+			if err := recordContinueExecutionMemoryBrief(r.Context(), req, outcome.FinalResult); err != nil {
+				log.Printf("continue execution memory brief: %v", err)
 			}
 			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult, outcome.Events))
 			return
@@ -1697,6 +1812,204 @@ func containsAllWorkflowSignals(text string, signals ...string) bool {
 		}
 	}
 	return len(signals) > 0
+}
+
+func getContinueUndoManager(userID, workingDir string) (*codingworkflow.UndoManager, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		userID = "daemon"
+	}
+	workingDir = strings.TrimSpace(workingDir)
+	if workingDir == "" {
+		workingDir = cwd()
+	}
+	if workingDir == "" {
+		return nil, fmt.Errorf("working directory is required")
+	}
+
+	continueUndoManagerCacheMu.RLock()
+	if mgr, ok := continueUndoManagerCache[userID+"::"+workingDir]; ok {
+		continueUndoManagerCacheMu.RUnlock()
+		return mgr, nil
+	}
+	continueUndoManagerCacheMu.RUnlock()
+
+	continueUndoManagerCacheMu.Lock()
+	defer continueUndoManagerCacheMu.Unlock()
+	if mgr, ok := continueUndoManagerCache[userID+"::"+workingDir]; ok {
+		return mgr, nil
+	}
+
+	spaceClient := getContinueUndoSpaceClient(userID + "::" + workingDir)
+	mgr, err := codingworkflow.NewUndoManager(workingDir, userID, spaceClient, codingworkflow.NewCodeArtifactExtractor(codingworkflow.NewGrammarRegistry()))
+	if err != nil {
+		return nil, err
+	}
+	continueUndoManagerCache[userID+"::"+workingDir] = mgr
+	return mgr, nil
+}
+
+func recordContinueDelegatedUndoTransaction(ctx context.Context, req continueAgentExecuteRequest, result *continueExecutionResult) error {
+	if result == nil || len(result.ModifiedFiles) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(req.Context.WorkspaceRoot) == "" {
+		return nil
+	}
+	workingDir := strings.TrimSpace(req.Context.WorkspaceRoot)
+	if _, err := os.Stat(workingDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	userID := firstNonEmpty(req.HQ.UserID, req.SessionID, "daemon")
+	mgr, err := getContinueUndoManager(userID, workingDir)
+	if err != nil {
+		return err
+	}
+
+	txn, err := mgr.BeginTransaction(ctx, continueDelegatedUndoDescription(req, result), continueDelegatedUndoWorkflowType(req, result))
+	if err != nil {
+		if strings.Contains(err.Error(), "transaction already in progress") {
+			return nil
+		}
+		return err
+	}
+	if txn != nil {
+		txn.SessionID = firstNonEmpty(req.SessionID, req.HQ.SessionID)
+		txn.WorkstreamID = firstNonEmpty(req.HQ.UserID, req.HQ.SessionID, req.SessionID)
+	}
+
+	seen := make(map[string]bool)
+	for _, file := range result.ModifiedFiles {
+		path := normalizeContinueModifiedFilePath(workingDir, file.FilePath)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if err := mgr.BackupFile(ctx, path); err != nil {
+			log.Printf("continue delegated undo ledger: backup %s: %v", path, err)
+		}
+	}
+
+	success := strings.EqualFold(strings.TrimSpace(result.Status), "completed") || strings.EqualFold(strings.TrimSpace(result.Status), "success")
+	if err := mgr.EndTransaction(ctx, success, 0, len(result.ModifiedFiles), 0); err != nil {
+		if strings.Contains(err.Error(), "no transaction in progress") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func recordContinueExecutionMemoryBrief(ctx context.Context, req continueAgentExecuteRequest, result *continueExecutionResult) error {
+	if result == nil {
+		return nil
+	}
+	brief := buildContinueExecutionMemoryBrief(req, result)
+	if strings.TrimSpace(brief) == "" {
+		return nil
+	}
+	key := continueSessionContextKey(req.SessionID, req.HQ.SessionID, req.HQ.UserID)
+	if strings.TrimSpace(key) == "" {
+		return nil
+	}
+
+	daemonSessionStore.mu.Lock()
+	stored := daemonSessionStore.data[key]
+	stored.ContinueMemorySummary = brief
+	stored.ContinueMemoryUpdatedAtMS = time.Now().UTC().UnixMilli()
+	stored.LastUpdated = time.Now().UTC()
+	daemonSessionStore.data[key] = stored
+	daemonSessionStore.mu.Unlock()
+	return persistDaemonLLMPoolState()
+}
+
+func buildContinueExecutionMemoryBrief(req continueAgentExecuteRequest, result *continueExecutionResult) string {
+	if result == nil {
+		return ""
+	}
+	parts := make([]string, 0, 6)
+	if summary := strings.TrimSpace(result.Summary); summary != "" {
+		parts = append(parts, "Summary: "+summary)
+	}
+	if status := strings.TrimSpace(result.Status); status != "" {
+		parts = append(parts, "Status: "+status)
+	}
+	if len(result.ModifiedFiles) > 0 {
+		fileParts := make([]string, 0, len(result.ModifiedFiles))
+		for _, file := range result.ModifiedFiles {
+			path := strings.TrimSpace(file.FilePath)
+			if path == "" {
+				continue
+			}
+			if op := strings.TrimSpace(file.CRUDOperation); op != "" {
+				fileParts = append(fileParts, fmt.Sprintf("%s(%s)", path, op))
+			} else {
+				fileParts = append(fileParts, path)
+			}
+		}
+		if len(fileParts) > 0 {
+			parts = append(parts, "Files: "+strings.Join(fileParts, ", "))
+		}
+	}
+	if mode := strings.TrimSpace(req.Mode); mode != "" {
+		parts = append(parts, "Mode: "+mode)
+	}
+	if phase := strings.TrimSpace(req.RequestedPhase); phase != "" {
+		parts = append(parts, "Phase: "+phase)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
+}
+
+func continueDelegatedUndoDescription(req continueAgentExecuteRequest, result *continueExecutionResult) string {
+	if result == nil {
+		return strings.TrimSpace(req.Task)
+	}
+	if summary := strings.TrimSpace(result.Summary); summary != "" {
+		return summary
+	}
+	return strings.TrimSpace(req.Task)
+}
+
+func continueDelegatedUndoWorkflowType(req continueAgentExecuteRequest, result *continueExecutionResult) string {
+	text := strings.ToLower(strings.TrimSpace(req.Task) + " " + strings.TrimSpace(req.Mode) + " " + strings.TrimSpace(req.RequestedPhase))
+	if strings.Contains(text, "test") || strings.Contains(text, "fix") {
+		return "test_fix"
+	}
+	if strings.Contains(text, "refactor") || strings.Contains(text, "cleanup") {
+		return "refactoring"
+	}
+	if strings.Contains(text, "debug") || strings.Contains(text, "investigate") {
+		return "debugging"
+	}
+	if strings.Contains(text, "implement") || strings.Contains(text, "add") || strings.Contains(text, "create") || strings.Contains(text, "apply") || strings.Contains(text, "patch") {
+		return "implementation"
+	}
+	return "general"
+}
+
+func normalizeContinueModifiedFilePath(workspaceRoot, filePath string) string {
+	trimmed := strings.TrimSpace(filePath)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		if rel, err := filepath.Rel(workspaceRoot, trimmed); err == nil {
+			trimmed = filepath.ToSlash(rel)
+		}
+	}
+	trimmed = filepath.ToSlash(filepath.Clean(trimmed))
+	if trimmed == "." || trimmed == "/" {
+		return ""
+	}
+	trimmed = strings.TrimPrefix(trimmed, "./")
+	return strings.TrimPrefix(trimmed, "/")
 }
 
 func buildContinueSessionSnapshot(requestID string, req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string) continueSessionSnapshot {

@@ -1029,7 +1029,8 @@ func (d *DefaultRepoIndexer) Index(task Task, state RunState) ([]string, error) 
 // DefaultPatchEngine applies simple text replacement patches.
 type DefaultPatchEngine struct{}
 
-func (d *DefaultPatchEngine) Apply(task Task, patch *Patch, state RunState) error {
+func (d *DefaultPatchEngine) Apply(ctx context.Context, task Task, patch *Patch, state RunState) error {
+	_ = ctx
 	_ = state
 	if patch == nil {
 		return fmt.Errorf("patch is required")

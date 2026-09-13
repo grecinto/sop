@@ -135,6 +135,14 @@ func (s *Service) Clone() ai.Agent[map[string]any] {
 	return clone
 }
 
+// RegisteredAgent returns a registered agent by ID when the service owns it.
+func (s *Service) RegisteredAgent(id string) ai.Agent[map[string]any] {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry[id]
+}
+
 // SetFeature allows toggling of agent features at runtime.
 func (s *Service) SetFeature(feature string, enabled bool) {
 	switch feature {

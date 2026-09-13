@@ -375,39 +375,43 @@ type UIHandoffResponse struct {
 }
 
 type daemonSessionContext struct {
-	AccessToken        string
-	RefreshToken       string
-	HQBaseURL          string
-	HQPort             string
-	HQUserID           string
-	HQSessionID        string
-	LLMProvider        string
-	LLMAPIKey          string
-	LLMModel           string
-	LLMURL             string
-	LLMCredentials     map[string]llmCredential
-	LLMPoolVersion     int64
-	LLMPoolUpdatedAtMS int64
-	LLMPoolUpdatedBy   string
-	ThinkingLevel      string
-	LastUpdated        time.Time
+	AccessToken               string
+	RefreshToken              string
+	HQBaseURL                 string
+	HQPort                    string
+	HQUserID                  string
+	HQSessionID               string
+	LLMProvider               string
+	LLMAPIKey                 string
+	LLMModel                  string
+	LLMURL                    string
+	LLMCredentials            map[string]llmCredential
+	LLMPoolVersion            int64
+	LLMPoolUpdatedAtMS        int64
+	LLMPoolUpdatedBy          string
+	ThinkingLevel             string
+	ContinueMemorySummary     string
+	ContinueMemoryUpdatedAtMS int64
+	LastUpdated               time.Time
 }
 
 type persistedDaemonLLMSessionState struct {
-	HQBaseURL          string                   `json:"hq_base_url,omitempty"`
-	HQPort             string                   `json:"hq_port,omitempty"`
-	HQUserID           string                   `json:"hq_user_id,omitempty"`
-	HQSessionID        string                   `json:"hq_session_id,omitempty"`
-	LLMProvider        string                   `json:"llm_provider,omitempty"`
-	LLMAPIKey          string                   `json:"llm_api_key,omitempty"`
-	LLMModel           string                   `json:"llm_model,omitempty"`
-	LLMURL             string                   `json:"llm_url,omitempty"`
-	LLMCredentials     map[string]llmCredential `json:"llm_credentials,omitempty"`
-	LLMPoolVersion     int64                    `json:"llm_pool_version,omitempty"`
-	LLMPoolUpdatedAtMS int64                    `json:"llm_pool_updated_at_ms,omitempty"`
-	LLMPoolUpdatedBy   string                   `json:"llm_pool_updated_by,omitempty"`
-	ThinkingLevel      string                   `json:"thinking_level,omitempty"`
-	LastUpdatedUnixMS  int64                    `json:"last_updated_unix_ms,omitempty"`
+	HQBaseURL                 string                   `json:"hq_base_url,omitempty"`
+	HQPort                    string                   `json:"hq_port,omitempty"`
+	HQUserID                  string                   `json:"hq_user_id,omitempty"`
+	HQSessionID               string                   `json:"hq_session_id,omitempty"`
+	LLMProvider               string                   `json:"llm_provider,omitempty"`
+	LLMAPIKey                 string                   `json:"llm_api_key,omitempty"`
+	LLMModel                  string                   `json:"llm_model,omitempty"`
+	LLMURL                    string                   `json:"llm_url,omitempty"`
+	LLMCredentials            map[string]llmCredential `json:"llm_credentials,omitempty"`
+	LLMPoolVersion            int64                    `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS        int64                    `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy          string                   `json:"llm_pool_updated_by,omitempty"`
+	ThinkingLevel             string                   `json:"thinking_level,omitempty"`
+	ContinueMemorySummary     string                   `json:"continue_memory_summary,omitempty"`
+	ContinueMemoryUpdatedAtMS int64                    `json:"continue_memory_updated_at_ms,omitempty"`
+	LastUpdatedUnixMS         int64                    `json:"last_updated_unix_ms,omitempty"`
 }
 
 type persistedDaemonLLMState struct {
@@ -753,6 +757,9 @@ func hasPersistableLLMState(ctx daemonSessionContext) bool {
 	if normalizePoolVersion(ctx.LLMPoolVersion) > 0 || normalizePoolTimestamp(ctx.LLMPoolUpdatedAtMS) > 0 || strings.TrimSpace(ctx.LLMPoolUpdatedBy) != "" {
 		return true
 	}
+	if strings.TrimSpace(ctx.ContinueMemorySummary) != "" || normalizePoolTimestamp(ctx.ContinueMemoryUpdatedAtMS) > 0 {
+		return true
+	}
 	return false
 }
 
@@ -770,20 +777,22 @@ func capturePersistedDaemonLLMState() persistedDaemonLLMState {
 			continue
 		}
 		state.Sessions[sessionKey] = persistedDaemonLLMSessionState{
-			HQBaseURL:          strings.TrimSpace(session.HQBaseURL),
-			HQPort:             strings.TrimSpace(session.HQPort),
-			HQUserID:           strings.TrimSpace(session.HQUserID),
-			HQSessionID:        strings.TrimSpace(session.HQSessionID),
-			LLMProvider:        strings.TrimSpace(session.LLMProvider),
-			LLMAPIKey:          strings.TrimSpace(session.LLMAPIKey),
-			LLMModel:           strings.TrimSpace(session.LLMModel),
-			LLMURL:             strings.TrimSpace(session.LLMURL),
-			LLMCredentials:     cloneLLMCredentialsMap(session.LLMCredentials),
-			LLMPoolVersion:     normalizePoolVersion(session.LLMPoolVersion),
-			LLMPoolUpdatedAtMS: normalizePoolTimestamp(session.LLMPoolUpdatedAtMS),
-			LLMPoolUpdatedBy:   normalizePoolUpdatedBy(session.LLMPoolUpdatedBy),
-			ThinkingLevel:      strings.TrimSpace(session.ThinkingLevel),
-			LastUpdatedUnixMS:  session.LastUpdated.UTC().UnixMilli(),
+			HQBaseURL:                 strings.TrimSpace(session.HQBaseURL),
+			HQPort:                    strings.TrimSpace(session.HQPort),
+			HQUserID:                  strings.TrimSpace(session.HQUserID),
+			HQSessionID:               strings.TrimSpace(session.HQSessionID),
+			LLMProvider:               strings.TrimSpace(session.LLMProvider),
+			LLMAPIKey:                 strings.TrimSpace(session.LLMAPIKey),
+			LLMModel:                  strings.TrimSpace(session.LLMModel),
+			LLMURL:                    strings.TrimSpace(session.LLMURL),
+			LLMCredentials:            cloneLLMCredentialsMap(session.LLMCredentials),
+			LLMPoolVersion:            normalizePoolVersion(session.LLMPoolVersion),
+			LLMPoolUpdatedAtMS:        normalizePoolTimestamp(session.LLMPoolUpdatedAtMS),
+			LLMPoolUpdatedBy:          normalizePoolUpdatedBy(session.LLMPoolUpdatedBy),
+			ThinkingLevel:             strings.TrimSpace(session.ThinkingLevel),
+			ContinueMemorySummary:     strings.TrimSpace(session.ContinueMemorySummary),
+			ContinueMemoryUpdatedAtMS: normalizePoolTimestamp(session.ContinueMemoryUpdatedAtMS),
+			LastUpdatedUnixMS:         session.LastUpdated.UTC().UnixMilli(),
 		}
 	}
 
@@ -899,6 +908,7 @@ func loadDaemonLLMPoolState() error {
 		existing.LLMModel = firstNonEmpty(strings.TrimSpace(persisted.LLMModel), existing.LLMModel)
 		existing.LLMURL = firstNonEmpty(strings.TrimSpace(persisted.LLMURL), existing.LLMURL)
 		existing.ThinkingLevel = firstNonEmpty(strings.TrimSpace(persisted.ThinkingLevel), existing.ThinkingLevel)
+		existing.ContinueMemorySummary = firstNonEmpty(strings.TrimSpace(persisted.ContinueMemorySummary), existing.ContinueMemorySummary)
 		if len(persisted.LLMCredentials) > 0 {
 			normalizedCredentials, normalizeErr := normalizeAndValidateLLMCredentials(persisted.LLMCredentials)
 			if normalizeErr == nil {
@@ -910,6 +920,7 @@ func loadDaemonLLMPoolState() error {
 		existing.LLMPoolVersion = normalizePoolVersion(persisted.LLMPoolVersion)
 		existing.LLMPoolUpdatedAtMS = normalizePoolTimestamp(persisted.LLMPoolUpdatedAtMS)
 		existing.LLMPoolUpdatedBy = normalizePoolUpdatedBy(persisted.LLMPoolUpdatedBy)
+		existing.ContinueMemoryUpdatedAtMS = normalizePoolTimestamp(persisted.ContinueMemoryUpdatedAtMS)
 		if persisted.LastUpdatedUnixMS > 0 {
 			existing.LastUpdated = time.UnixMilli(persisted.LastUpdatedUnixMS).UTC()
 		}
@@ -2201,7 +2212,8 @@ func handleTerminalStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// Get the shell session manager
 	shellMgr := GetGlobalShellSessionManager()
-	if shellMgr == nil {		respondJSON(w, http.StatusOK, map[string]any{
+	if shellMgr == nil {
+		respondJSON(w, http.StatusOK, map[string]any{
 			"session_id": sessionID,
 			"output":     "",
 			"available":  false,
@@ -2334,22 +2346,24 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 		nextThinkingLevel = strings.TrimSpace(storedSessionContext.ThinkingLevel)
 	}
 	daemonSessionStore.data[ctxKey] = daemonSessionContext{
-		AccessToken:        accessToken,
-		RefreshToken:       refreshToken,
-		HQBaseURL:          normalizedHQBaseURL,
-		HQPort:             hqPort,
-		HQUserID:           strings.TrimSpace(req.HQ.UserID),
-		HQSessionID:        strings.TrimSpace(req.HQ.SessionID),
-		LLMProvider:        nextProvider,
-		LLMAPIKey:          nextAPIKey,
-		LLMModel:           nextModel,
-		LLMURL:             nextURL,
-		LLMCredentials:     cloneLLMCredentialsMap(mergedCredentials),
-		LLMPoolVersion:     mergedPoolVersion,
-		LLMPoolUpdatedAtMS: mergedPoolUpdatedAtMS,
-		LLMPoolUpdatedBy:   mergedPoolUpdatedBy,
-		ThinkingLevel:      nextThinkingLevel,
-		LastUpdated:        time.Now().UTC(),
+		AccessToken:               accessToken,
+		RefreshToken:              refreshToken,
+		HQBaseURL:                 normalizedHQBaseURL,
+		HQPort:                    hqPort,
+		HQUserID:                  strings.TrimSpace(req.HQ.UserID),
+		HQSessionID:               strings.TrimSpace(req.HQ.SessionID),
+		LLMProvider:               nextProvider,
+		LLMAPIKey:                 nextAPIKey,
+		LLMModel:                  nextModel,
+		LLMURL:                    nextURL,
+		LLMCredentials:            cloneLLMCredentialsMap(mergedCredentials),
+		LLMPoolVersion:            mergedPoolVersion,
+		LLMPoolUpdatedAtMS:        mergedPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:          mergedPoolUpdatedBy,
+		ThinkingLevel:             nextThinkingLevel,
+		ContinueMemorySummary:     storedSessionContext.ContinueMemorySummary,
+		ContinueMemoryUpdatedAtMS: storedSessionContext.ContinueMemoryUpdatedAtMS,
+		LastUpdated:               time.Now().UTC(),
 	}
 	daemonSessionStore.mu.Unlock()
 	if err := persistDaemonLLMPoolState(); err != nil {

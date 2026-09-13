@@ -59,12 +59,17 @@ type compositeIDEWorkerBackend struct {
 
 func newDefaultIDEWorkerBackend(service *localRAGService) ideworker.Backend {
 	if service == nil {
-		return compositeIDEWorkerBackend{}
+		return newDaemonShellIDEWorkerBackend(nil)
 	}
-	return newCompositeIDEWorkerBackend(
-		newContinueIDEWorkerBackend(service),
-		newDaemonShellIDEWorkerBackend(service.shellSessions),
-	)
+
+	switch sopbackend.NormalizeWorkflowBackend(sopbackend.GetConfig().WorkflowBackend) {
+	case "daemon":
+		return newDaemonShellIDEWorkerBackend(service.shellSessions)
+	case "continue":
+		return newContinueIDEWorkerBackend(service)
+	default:
+		return newContinueIDEWorkerBackend(service)
+	}
 }
 
 func newCompositeIDEWorkerBackend(backends ...ideworker.Backend) ideworker.Backend {

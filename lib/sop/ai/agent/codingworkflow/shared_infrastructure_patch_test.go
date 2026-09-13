@@ -1,6 +1,7 @@
 package codingworkflow
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func TestDefaultSharedInfrastructureInitializesPatchEngine(t *testing.T) {
 		Description: "update hello function",
 	}
 
-	if err := patchOps.ApplyPatch(Task{WorkingDir: tmpDir}, patch, RunState{}); err != nil {
+	if err := patchOps.ApplyPatch(context.Background(), Task{WorkingDir: tmpDir}, patch, RunState{}); err != nil {
 		t.Fatalf("ApplyPatch returned error: %v", err)
 	}
 

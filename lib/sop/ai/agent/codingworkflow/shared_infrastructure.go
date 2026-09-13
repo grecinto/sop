@@ -43,7 +43,7 @@ type RepoIndexer interface {
 
 // PatchEngine applies a patch to disk.
 type PatchEngine interface {
-	Apply(Task, *Patch, RunState) error
+	Apply(context.Context, Task, *Patch, RunState) error
 }
 
 // ChangedFileInspector reports changed files in a repository.
@@ -672,7 +672,7 @@ func (s *SharedInfrastructure) NewPatchOperations() *PatchOperations {
 }
 
 // ApplyPatch applies a patch to disk with safety checks.
-func (p *PatchOperations) ApplyPatch(task Task, patch *Patch, state RunState) error {
+func (p *PatchOperations) ApplyPatch(ctx context.Context, task Task, patch *Patch, state RunState) error {
 	// Check safety policy first
 	if p.infra.Policy != nil {
 		if err := p.infra.Policy.Allow(task, state); err != nil {
@@ -684,7 +684,7 @@ func (p *PatchOperations) ApplyPatch(task Task, patch *Patch, state RunState) er
 		return fmt.Errorf("patch engine not initialized")
 	}
 
-	return p.infra.PatchEngine.Apply(task, patch, state)
+	return p.infra.PatchEngine.Apply(ctx, task, patch, state)
 }
 
 // PreviewPatch generates a preview of what a patch would do.

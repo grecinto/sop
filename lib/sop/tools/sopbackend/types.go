@@ -1,6 +1,8 @@
 package sopbackend
 
 import (
+	"strings"
+
 	"github.com/sharedcode/sop/ai"
 )
 
@@ -74,6 +76,7 @@ type Config struct {
 	SessionTokenTTLMinutes int              `json:"session_token_ttl_minutes,omitempty"`
 	SessionSecret          SecuredString    `json:"session_secret,omitempty"`
 	AuthProviderName       string           `json:"auth_provider,omitempty"`
+	WorkflowBackend        string           `json:"workflow_backend,omitempty"`
 	UsersStore             UserStore        `json:"-"`
 	persistentUsersStore   UserStore        `json:"-"`
 
@@ -109,4 +112,15 @@ func FirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func NormalizeWorkflowBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "continue", "continue_worker", "continue_delegate", "ide_worker":
+		return "continue"
+	case "daemon", "daemon_shell", "local_daemon", "shell":
+		return "daemon"
+	default:
+		return "continue"
+	}
 }

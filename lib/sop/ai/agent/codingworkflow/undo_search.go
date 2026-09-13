@@ -473,6 +473,12 @@ func (um *UndoManager) spaceItemToTransaction(item SpaceItem) (WorkflowTransacti
 	if val, ok := item.Metadata["sub_component"].(string); ok {
 		txn.SubComponent = val
 	}
+	if val, ok := item.Metadata["modified_files"].(string); ok && val != "" {
+		var files []ModifiedFileRecord
+		if err := json.Unmarshal([]byte(val), &files); err == nil {
+			txn.ModifiedFiles = files
+		}
+	}
 
 	// Extract arrays
 	if val, ok := item.Metadata["tags"].([]interface{}); ok {
