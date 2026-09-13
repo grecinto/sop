@@ -383,6 +383,8 @@ This is the transport behind the daemon Ask capability's delegated Continue task
     "stream_progress": true,
     "include_modified_files": true,
     "include_diff_deltas": true,
+    "include_change_ledger": true,
+    "include_undo_refs": true,
     "include_metadata": true,
     "prefer_artifact_refs": true,
     "max_inline_diff_bytes": 16384
@@ -418,7 +420,7 @@ The endpoint returns NDJSON in the same event shape used by chat. During long-ru
 {"type":"continue_progress","message":"Continue Ask2Ask handling phase=execution file=src/parser/handler.go"}
 {"type":"tool_call","name":"code.apply_patch","args":{"path":"src/parser/handler.go"}}
 {"type":"continue_modified_file","file":{"file_path":"src/parser/handler.go","crud_operation":"update","diff_summary":"Applied delegated execution change to src/parser/handler.go","diff_format":"unified","diff_delta":"@@ ...","metadata":{"phase":"execution"}}}
-{"type":"done","result":{"status":"completed","summary":"Continue completed delegated execution work for src/parser/handler.go","modified_files":[{"file_path":"src/parser/handler.go","crud_operation":"update","diff_summary":"Applied delegated execution change to src/parser/handler.go","diff_format":"unified","diff_delta":"@@ ...","metadata":{"phase":"execution"}}],"artifacts":[{"id":"diff::handler.go","kind":"diff","path":"artifacts/diffs/handler.go.patch","description":"Full diff for src/parser/handler.go","metadata":{"diff_format":"unified"}}],"metadata":{"requested_phase":"execution","tool_choice":"apply_patch","allowed_tools":["read_file","apply_patch","get_problems"]}}}
+{"type":"done","result":{"status":"completed","summary":"Continue completed delegated execution work for src/parser/handler.go","modified_files":[{"file_path":"src/parser/handler.go","crud_operation":"update","diff_summary":"Applied delegated execution change to src/parser/handler.go","diff_format":"unified","diff_delta":"@@ ...","before_snippet":"...","after_snippet":"...","undo_ref":"undo::txn-123","change_id":"change::handler.go::1","metadata":{"phase":"execution","line_range":{"start":42,"end":88}}}],"artifacts":[{"id":"diff::handler.go","kind":"diff","path":"artifacts/diffs/handler.go.patch","description":"Full diff for src/parser/handler.go","metadata":{"diff_format":"unified"}}],"metadata":{"requested_phase":"execution","tool_choice":"apply_patch","allowed_tools":["read_file","apply_patch","get_problems"],"change_ledger":"available"}}}
 ```
 
 Execution result rules:

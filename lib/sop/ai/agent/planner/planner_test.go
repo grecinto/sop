@@ -635,6 +635,48 @@ func TestArtifactInventorySelectionAndCompletion_AdvancesActiveItem(t *testing.T
 	}
 }
 
+func TestSyncWorkInventoryFromTestResult_CreatesItemsFromRealFailures(t *testing.T) {
+	phaseArtifacts := map[string]map[string]any{}
+	phase := newCodingPhase("execution", &cw.SharedInfrastructure{STMAccessor: func() cw.STMReader {
+		return &phaseSTMReader{thread: &phaseWorkStreamReader{ctx: &phaseWorkStreamContext{phaseArtifacts: phaseArtifacts}}}
+	}})
+
+	output := "--- FAIL: TestAuthenticateUser_ValidCredentials (0.00s)\n" +
+		"    auth_test.go:42: Authenticate() = false, want true\n" +
+		"FAIL\tgithub.com/sharedcode/sop/tools/sopbackend\t0.012s\n"
+
+	phase.syncWorkInventoryFromTestResult(cw.TestResult{Passed: false, Output: output})
+
+	_, snapshot, err := phase.loadArtifactInventorySnapshot()
+	if err != nil {
+		t.Fatalf("expected snapshot load to succeed, got %v", err)
+	}
+	if snapshot == nil {
+		t.Fatal("expected a compiled inventory snapshot from real test failures")
+	}
+	items := snapshotItems(snapshot)
+	if len(items) != 1 {
+		t.Fatalf("expected exactly one failing test item, got %#v", items)
+	}
+	if items[0]["id"] != "test:TestAuthenticateUser_ValidCredentials" {
+		t.Fatalf("expected item id to match failing test name, got %#v", items[0])
+	}
+	if items[0]["status"] != "pending" && items[0]["status"] != "active" {
+		t.Fatalf("expected new failing test item to be pending or active, got %#v", items[0])
+	}
+
+	// Once the test passes, the item should be marked completed automatically.
+	phase.syncWorkInventoryFromTestResult(cw.TestResult{Passed: true, Output: "ok  \tgithub.com/sharedcode/sop/tools/sopbackend\t0.010s\n"})
+	_, snapshot, err = phase.loadArtifactInventorySnapshot()
+	if err != nil {
+		t.Fatalf("expected snapshot load to succeed, got %v", err)
+	}
+	items = snapshotItems(snapshot)
+	if len(items) != 1 || items[0]["status"] != "completed" {
+		t.Fatalf("expected the previously failing test item to be completed, got %#v", items)
+	}
+}
+
 func TestSpacesPhaseRunDesignMutation_UsesSharedStructuredPlannerWhenAvailable(t *testing.T) {
 	phase := newSpacesPhase("planning", &cw.SharedInfrastructure{Planner: &staticStructuredPlanner{plan: cw.StructuredPlan{
 		Objective:     "Plan space mutation",

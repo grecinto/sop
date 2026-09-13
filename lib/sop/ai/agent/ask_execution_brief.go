@@ -195,26 +195,32 @@ func (a *CopilotAgent) currentExecutionBrief(classification *AskTaskContext, que
 	}
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		brief := a.executionBriefFromStructuredPlan(classification, query)
-		return a.withFailureInventoryContext(brief)
+		return a.withInventoryContext(brief)
 	}
 	if fromPlan := a.executionBriefFromStructuredPlan(classification, query); fromPlan != nil {
-		return a.withFailureInventoryContext(fromPlan)
+		return a.withInventoryContext(fromPlan)
 	}
 	if authored := a.loadAuthoredExecutionBrief(classification, classification.PhasePlan, query); authored != nil {
-		return a.withFailureInventoryContext(authored)
+		return a.withInventoryContext(authored)
 	}
 	if thread := a.currentConversationThread(); thread != nil && thread.StreamContext != nil && thread.StreamContext.PhasePlan != nil && thread.StreamContext.PhasePlan.ExecutionBrief != nil {
-		return a.withFailureInventoryContext(thread.StreamContext.PhasePlan.ExecutionBrief)
+		return a.withInventoryContext(thread.StreamContext.PhasePlan.ExecutionBrief)
 	}
-	return a.withFailureInventoryContext(buildCodingExecutionBrief(query, classification, classification.PhasePlan))
+	return a.withInventoryContext(buildCodingExecutionBrief(query, classification, classification.PhasePlan))
 }
 
-func (a *CopilotAgent) withFailureInventoryContext(brief *ExecutionBrief) *ExecutionBrief {
+func (a *CopilotAgent) withInventoryContext(brief *ExecutionBrief) *ExecutionBrief {
 	if brief == nil || a == nil {
 		return brief
 	}
 	thread := a.currentConversationThread()
-	if thread == nil || thread.StreamContext == nil || !thread.StreamContext.FailureInventoryCaptured || len(thread.StreamContext.FailureClusters) == 0 {
+	if thread == nil || thread.StreamContext == nil {
+		return brief
+	}
+	if inventory := workInventoryForDisplay(thread); inventory != nil && len(inventory.Items) > 0 {
+		return a.withWorkInventoryContext(brief, inventory)
+	}
+	if !thread.StreamContext.FailureInventoryCaptured || len(thread.StreamContext.FailureClusters) == 0 {
 		return brief
 	}
 	active := strings.TrimSpace(thread.StreamContext.ActiveFailureCluster)
@@ -241,6 +247,68 @@ func (a *CopilotAgent) withFailureInventoryContext(brief *ExecutionBrief) *Execu
 		}
 	}
 	return brief
+}
+
+func (a *CopilotAgent) withWorkInventoryContext(brief *ExecutionBrief, inventory *WorkInventory) *ExecutionBrief {
+	if brief == nil || inventory == nil || len(inventory.Items) == 0 {
+		return brief
+	}
+	active := inventory.GetActiveItem()
+	if active == nil && len(inventory.Items) > 0 {
+		active = &inventory.Items[0]
+	}
+	if active == nil {
+		return brief
+	}
+	activeLabel := strings.TrimSpace(active.DisplayName)
+	if activeLabel == "" {
+		activeLabel = strings.TrimSpace(active.ID)
+	}
+	if activeLabel == "" {
+		return brief
+	}
+	activeLine := "Active work item: " + activeLabel
+	if strings.TrimSpace(brief.CurrentFocus) == "" {
+		brief.CurrentFocus = activeLine
+	} else if !strings.Contains(brief.CurrentFocus, activeLine) {
+		brief.CurrentFocus = brief.CurrentFocus + " " + activeLine
+	}
+	inventoryLine := summarizeWorkInventoryForBrief(inventory)
+	if inventoryLine != "" {
+		inventoryLine = "Compiled work inventory: " + inventoryLine
+	}
+	for idx := range brief.Steps {
+		step := &brief.Steps[idx]
+		if idx == 0 && inventoryLine != "" && !containsExactString(step.ContextInstructions, inventoryLine) {
+			step.ContextInstructions = append(step.ContextInstructions, inventoryLine)
+		}
+		if (step.Phase == "investigation" || step.Phase == "planning" || step.Phase == "execution") && !containsExactString(step.ContextInstructions, activeLine) {
+			step.ContextInstructions = append(step.ContextInstructions, activeLine)
+		}
+	}
+	return brief
+}
+
+func summarizeWorkInventoryForBrief(inventory *WorkInventory) string {
+	if inventory == nil || len(inventory.Items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(inventory.Items))
+	for _, item := range inventory.Items {
+		label := strings.TrimSpace(item.DisplayName)
+		if label == "" {
+			label = strings.TrimSpace(item.ID)
+		}
+		if label == "" {
+			continue
+		}
+		status := strings.TrimSpace(item.Status)
+		if status == "" {
+			status = "pending"
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", label, status))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func containsExactString(values []string, want string) bool {

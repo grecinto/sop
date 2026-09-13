@@ -6,6 +6,8 @@
 
 This document captures the actual Continue IDE-side coding workflow surface that AI Studio from Northstar AI can rely on today, the architectural boundary between AI Studio and Continue, and the remaining gaps between a strong engineering loop and broader SDLC coverage.
 
+Design goal: preserve Continue as the reusable editor-native copilot substrate, and keep the AI Studio/daemon side thin so it orchestrates and records rather than re-implementing Continue internals.
+
 Core conclusion:
 
 - Continue is currently the strongest open-source substrate in this stack for coding workflows and IDE integration.
@@ -22,6 +24,7 @@ The current implementation is now aligned with an Ask2Ask-style integration post
 - The daemon owns request correlation, session snapshots, and request-scoped execution state through `request_id`.
 - Continue only participates in AI Studio delegation for daemon-advertised provider/model pairs, which means the Big 3 provider families are supported through this path while unsupported routes such as local Ollama remain outside the native AI Studio contract.
 - Continue remembers its HQ and daemon auth state across editor restarts through VS Code secret storage and rehydrates it on startup.
+- The active workflow backend should be selectable, with `continue` as the shipping implementation and `daemon` as the deferred fallback implementation.
 
 ## Control Boundary
 
@@ -254,6 +257,8 @@ The strategic goal is:
 
 - use Continue as the robust open-source IDE execution substrate
 - keep AI Studio as the workflow controller
+- reuse Continue's AST/tree-sitter and editor-side action surface through a thin bridge instead of rebuilding those primitives in the daemon
+- route coding-workflow execution through a configurable backend interface rather than hardcoding daemon workflow logic
 - let AI Studio decide which Continue tools are exposed for a given workflow profile
 - add broader SDLC abstractions at the AI Studio layer rather than overloading Continue with product-controller responsibilities
 - consume Continue phase and tool metadata as data, not as a hardwired special case

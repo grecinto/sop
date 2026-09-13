@@ -1489,10 +1489,97 @@ func (p *CodingPhase) runTests(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("run tests: %w", err)
 	}
 
+	p.syncWorkInventoryFromTestResult(result)
+
 	if result.Passed {
 		return fmt.Sprintf("Tests passed\n%s", result.Output), nil
 	}
 	return fmt.Sprintf("Tests failed\n%s", result.Output), nil
+}
+
+// syncWorkInventoryFromTestResult keeps the artifact/work inventory in sync with the
+// actual failing tests so the item list reflects reality instead of only static repo scans.
+func (p *CodingPhase) syncWorkInventoryFromTestResult(result cw.TestResult) {
+	structured := cw.ParseTestResult("go test", result.Output)
+	failing := make(map[string]cw.ErrorDetail)
+	if structured != nil {
+		for _, detail := range structured.ErrorDetails {
+			name := strings.TrimSpace(detail.Name)
+			if detail.Type == "test_failure" && name != "" {
+				failing[name] = detail
+			}
+		}
+	}
+
+	_, snapshot, err := p.loadArtifactInventorySnapshot()
+	if err != nil {
+		return
+	}
+	if snapshot == nil {
+		if len(failing) == 0 {
+			return
+		}
+		snapshot = map[string]any{
+			"inventory_type": "test_failures",
+			"captured_at":    time.Now().UnixMilli(),
+		}
+	}
+
+	items := snapshotItems(snapshot)
+	seen := make(map[string]bool, len(failing))
+	for _, item := range items {
+		if itemType, _ := item["type"].(string); itemType != "test" {
+			continue
+		}
+		name := strings.TrimPrefix(inventoryItemID(item), "test:")
+		if detail, stillFailing := failing[name]; stillFailing {
+			seen[name] = true
+			if item["description"] == nil || item["description"] == "" {
+				item["description"] = detail.Message
+			}
+			continue
+		}
+		if status, _ := item["status"].(string); status != "completed" {
+			item["status"] = "completed"
+			item["completed_at"] = time.Now().UnixMilli()
+		}
+	}
+
+	for name, detail := range failing {
+		if seen[name] {
+			continue
+		}
+		item := map[string]any{
+			"id":           "test:" + name,
+			"type":         "test",
+			"display_name": name,
+			"status":       "pending",
+			"description":  detail.Message,
+		}
+		if detail.Location != "" {
+			item["metadata"] = map[string]any{"file_path": detail.Location, "line": detail.Line}
+		}
+		items = append(items, item)
+	}
+
+	snapshot["items"] = items
+	activeID, _ := snapshot["active_item_id"].(string)
+	activeStillPending := false
+	for _, item := range items {
+		if inventoryItemID(item) == activeID {
+			if status, _ := item["status"].(string); status != "completed" {
+				activeStillPending = true
+			}
+			break
+		}
+	}
+	if !activeStillPending {
+		advanceArtifactInventoryActiveItem(snapshot, items)
+	}
+
+	if err := p.persistArtifactInventorySnapshot(snapshot); err != nil {
+		log.Warn("[syncWorkInventoryFromTestResult] failed to persist inventory snapshot", "error", err)
+	}
 }
 
 func (p *CodingPhase) runAssessAndRoute(args map[string]any) (string, error) {

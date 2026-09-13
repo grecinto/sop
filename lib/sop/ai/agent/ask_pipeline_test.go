@@ -678,6 +678,41 @@ func TestCurrentExecutionBrief_IncludesStoredFailureInventoryContext(t *testing.
 	}
 }
 
+func TestCurrentExecutionBrief_IncludesWorkInventoryContext(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.WorkInventory = &WorkInventory{
+		InventoryType: "test_failures",
+		ActiveItemID:  "test:TestAuthenticateUser_ValidCredentials",
+		Items: []InventoryItem{
+			{ID: "test:TestAuthenticateUser_ValidCredentials", Type: "test", DisplayName: "TestAuthenticateUser_ValidCredentials", Status: "active"},
+			{ID: "test:TestSessionTokenTTL", Type: "test", DisplayName: "TestSessionTokenTTL", Status: "pending"},
+		},
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}, OriginalQuery: "fix failing tests in the parser package"}
+
+	brief := ag.currentExecutionBrief(classification, classification.OriginalQuery)
+	if brief == nil {
+		t.Fatal("expected execution brief")
+	}
+	if !strings.Contains(brief.CurrentFocus, "Active work item: TestAuthenticateUser_ValidCredentials") {
+		t.Fatalf("expected current focus to include active work item, got %#v", brief.CurrentFocus)
+	}
+	if len(brief.Steps) == 0 {
+		t.Fatal("expected execution brief steps")
+	}
+	joined := strings.Join(brief.Steps[0].ContextInstructions, " ")
+	if !strings.Contains(joined, "Compiled work inventory: TestAuthenticateUser_ValidCredentials (active); TestSessionTokenTTL (pending)") {
+		t.Fatalf("expected first step to include compiled work inventory, got %#v", brief.Steps[0].ContextInstructions)
+	}
+	if !strings.Contains(joined, "Active work item: TestAuthenticateUser_ValidCredentials") {
+		t.Fatalf("expected first step to include active work item, got %#v", brief.Steps[0].ContextInstructions)
+	}
+}
+
 func TestBuildPhasePrompt_IncludesExecutionBrief(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}

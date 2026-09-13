@@ -1,12 +1,18 @@
 # Continue Native Transport Implementation Plan
 
-**Status**: Completed for the implemented rollout sections 2a and 2b; remaining work is limited to follow-on Continue client wiring and operational hardening.
+**Status**: Completed for the implemented transport rollout; remaining work is refactoring the coding workflow behind a swappable backend interface and wiring Continue as the shipping implementation.
 
 ## Goal
 
-Keep AI Studio and the daemon as the controller while exposing Continue as an IDE-native participant for coding workflows.
+Define a small coding-workflow backend API that AI Studio owns, then implement it first with Continue and later with the daemon.
 
-The integration target is the native Continue transport already implemented under `/api/continue/*`, with explicit provider/model attributes on each request.
+Design goal: keep the Continue integration thin and reuse Continue's own editor-side AST/tree-sitter, file navigation, search, and local execution capabilities instead of reimplementing them in the daemon.
+
+The daemon should own the prompt service, run ledger, and workflow record; Continue should own the editor-native execution substrate.
+
+The shipping configuration should use Continue as the execution backend. The daemon implementation remains a future backend, not the primary path.
+
+The integration target is the native Continue transport already implemented under `/api/continue/*`, with explicit provider/model attributes on each request and structured change-history results for AI Studio to record.
 
 ## Non-Goals
 
@@ -14,6 +20,40 @@ The integration target is the native Continue transport already implemented unde
 - Do not add `/v1/chat/completions`, `/v1/models`, or `/api/continue/config` back as canonical surfaces.
 - Do not let Continue become the workflow controller.
 - Do not move workflow state, approvals, or memory ownership into the editor client.
+- Do not rebuild Continue's internal AST/tree-sitter, search, navigation, or edit loops inside the daemon bridge.
+
+## Anti-Drift Rule
+
+If a feature already exists in Continue's editor-native tool surface, prefer a thin bridge that reuses it instead of cloning the behavior in daemon-side workflow code.
+
+Use the daemon only for prompt servicing, recording, routing, and structured history capture.
+
+## Recommended API Boundary
+
+The workflow contract should be small and swappable:
+
+```go
+type PromptService interface {
+  RecordPrompt(request PromptRecord) error
+  StartRun(ctx context.Context, request WorkflowRunRequest) (WorkflowRunHandle, error)
+  AppendEvent(ctx context.Context, runID string, event WorkflowEvent) error
+  CompleteRun(ctx context.Context, runID string, result WorkflowRunResult) error
+}
+
+type CodingWorkflowWorker interface {
+  Capabilities() []string
+  Run(ctx context.Context, request WorkflowRunRequest) (WorkflowRunResult, error)
+  Cancel(ctx context.Context, runID string) error
+}
+
+type WorkflowBackend interface {
+  Name() string
+  PromptService
+  CodingWorkflowWorker
+}
+```
+
+The backend result should carry structured change-history data, including modified files, diff summaries, undo references, and validation outcome.
 
 ## Current Architecture
 
@@ -40,6 +80,15 @@ daemon Ask turn
   -> daemon resumes control with the result
 ```
 
+### Workflow backend selection
+
+The active implementation should be configurable:
+
+- `workflow_backend=continue` for the shipping Continue execution path
+- `workflow_backend=daemon` for the future daemon implementation
+
+AI Studio should route the prompt to the selected backend, then persist the returned structured result as the visible execution history.
+
 ## Target Ask-Side Design
 
 ### LAO rule
@@ -64,6 +113,8 @@ The target capability should expose one tool only:
 That tool is not a low-level proxy for Continue's internal read/search/edit/navigation primitives.
 
 Instead, it represents Continue's own local Ask pipeline as a bounded execution substrate. The daemon LLM uses it when the current slice of work is IDE-native coding that Continue should complete locally.
+
+The worker result should be structured enough for AI Studio to render file-level history and undo cards from the returned `modified_files` and diff metadata.
 
 ### BuildContext and BuildInstructions requirements
 
@@ -137,6 +188,13 @@ The goal is for Continue to successfully complete the IDE coding work it is alre
 Detailed workflow-surface analysis and SDLC boundary are documented in [docs/CONTINUE_IDE_WORKFLOW_SURFACE.md](docs/CONTINUE_IDE_WORKFLOW_SURFACE.md).
 
 Token-efficiency planning for Continue-originated requests is documented in [docs/CONTINUE_TOKEN_OPTIMIZATION_PLAN.md](docs/CONTINUE_TOKEN_OPTIMIZATION_PLAN.md).
+
+### 1. Workflow backend API extraction (new)
+
+- extract the coding workflow contract behind a small backend interface rather than spreading investigation/test-fix logic across daemon handlers
+- implement the Continue backend first so the shipping path owns investigation, patching, validation, and structured result emission
+- keep the daemon backend as a future implementation that can be turned on by configuration without changing the prompt service contract
+- ensure the AI Studio prompt ledger stores the structured result, including file diff history and undo references, as the source of truth for visible change history
 
 ### 2. Continue client wiring and workflow shaping
 

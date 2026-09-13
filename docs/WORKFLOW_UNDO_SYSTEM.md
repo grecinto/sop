@@ -34,6 +34,9 @@ The Workflow Undo System treats each coding workflow run as an **atomic transact
 
 ## Multi-Language Support
 > TODO: Revisit the undo history UX so transaction cards can render Git-style diff previews and per-file change metadata directly from the new delta payloads.
+
+For the Continue-backed coding workflow, AI Studio should treat the worker's structured `modified_files` payload, diff summaries, and undo references as the canonical source for timeline cards and restore actions.
+
 ### Test Runner
 The system automatically detects project type and runs appropriate test commands:
 

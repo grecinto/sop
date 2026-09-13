@@ -4,7 +4,9 @@
 
 ## Summary
 
-Continue is the IDE surface and an optional execution participant. AI Studio and the daemon remain the controller.
+Continue is the IDE surface and the preferred execution backend. AI Studio and the daemon remain the controller.
+
+Design goal: keep the bridge thin and reuse Continue's own AST/tree-sitter, editor context, search, navigation, and local execution primitives rather than reimplementing them in the daemon.
 
 That is the governing rule for this integration.
 
@@ -19,6 +21,10 @@ The capability stack therefore looks like this:
 For SDK reuse, the same Ask runtime can also be mounted in reverse as a participant under another controller. That does not change the internal rule above for the default Continue bridge. It adds a second supported boundary: another agent may call SOP Ask as a delegated worker while SOP Ask still controls its own inner capability pipeline.
 
 Continue can contribute editor context, diff-aware execution, and local workflow affordances, but it does not own orchestration, memory, approvals, or long-running workflow state.
+
+The implementation boundary should be a small backend API that can be swapped between Continue and the daemon without changing the controller contract.
+
+If Continue already provides a capability natively, the bridge should call that capability and return its structured result instead of duplicating the logic in daemon code.
 
 ## Capability-first integration model
 
@@ -73,6 +79,7 @@ Continue is the intended IDE-native bridge for richer semantic actions once the 
 - workflow phase progression
 - approvals and policy rails
 - session continuity and durable state
+- prompt servicing, prompt ledger, and visible change-history storage
 - memory and retrieval
 - fallback execution when no editor worker is available
 
@@ -82,6 +89,7 @@ Continue is the intended IDE-native bridge for richer semantic actions once the 
 - active file, selection, and open-file context
 - editor-aware execution when explicitly delegated
 - worker capability advertisement and callback handling
+- structured file-change reporting for history and undo cards
 
 ## Why the OpenAI Facade Was Wrong
 
@@ -122,6 +130,8 @@ Key transport properties:
 - responses stream as NDJSON
 - daemon-owned metadata declares AI Studio as controller and Continue as editor worker
 - daemon-owned metadata declares the authoritative AI Studio provider/model catalog through `control_model.supported_llms`
+
+The worker-facing result contract should remain structured enough for AI Studio to render a complete history entry. At minimum, the returned result should include modified files, diff summaries, change identifiers, optional undo references, and validation metadata.
 
 ## Ask-Side Abstraction
 
@@ -178,6 +188,14 @@ Recommended tool shape:
 - `delegate_continue_task`
 
 That sole tool is the embodiment of Continue's own Ask pipeline. The daemon LLM uses it when a bounded slice of the request should be completed by Continue locally inside the editor.
+
+For the refactor plan, treat that worker behavior as one implementation of a broader workflow-backend interface. The controller still talks to one prompt-service contract, while Continue supplies the shipping worker implementation.
+
+Recommended contract shape:
+
+- `PromptService` records prompts, events, and completion results for AI Studio.
+- `CodingWorkflowWorker` executes bounded investigation/test-fix work and returns structured change history.
+- `WorkflowBackend` combines the two behind a configurable backend selector such as `continue` or `daemon`.
 
 ### Dynamic context and instructions
 
