@@ -1,7 +1,7 @@
 # CLI Coding Workflow Implementation
 
-**Last Updated**: 2026-08-29  
-**Status**: ✅ Production - Autonomous Test Fixing Validated  
+**Last Updated**: 2026-09-09  
+**Status**: ✅ Production - Autonomous Test Fixing Validated + Objective-Driven Inventory-First Runtime  
 **Phase System**: Investigation → Planning → Execution with LLM orchestration  
 **Post-V1**: Data-Driven Workflows with Infrastructure Integration
 
@@ -23,7 +23,19 @@ The coding workflow with phase-based orchestration is now **production-ready** f
 
 ## Purpose
 
-This document captures the coding workflow capability that makes SOP feel like a high-quality terminal-first coding assistant. The current implementation uses a capability-based adapter over the shared CodingWorkflow framework so that Ask can reuse the useful coding helpers without reintroducing the legacy controller-style execution path. Post-V1 will enable **data-driven workflow authoring** while preserving infrastructure power.
+This document captures the coding capability that makes SOP feel like a high-quality terminal-first coding assistant. Despite the historical "workflow" naming, the intended architecture is not a set of bespoke task flows. The current implementation uses a capability-based adapter over the shared CodingWorkflow framework so that Ask can reuse the useful coding helpers without reintroducing the legacy controller-style execution path. Post-V1 should continue moving toward a generic objective-driven runtime with reusable repo tooling and configurable objective profiles.
+
+## Design Rule
+
+The coding system should be treated as a generic repo-aware runtime, not as a collection of named task workflows.
+
+- A user request selects an objective, not a workflow.
+- Ask/ReAct remains the only controller.
+- AST, tree-sitter, diagnostics, test discovery, and artifact extraction are low-level ingredients and tools.
+- Inventory compilation, ranking, selection, execution, and completion are generic runtime operations.
+- Requests such as `fix failing tests`, `analyze this codebase`, `design a class`, or `implement a feature` should differ by objective profile and completion criteria, not by separate orchestrators.
+
+Legacy labels such as "test fix workflow" are still useful as shorthand for validated objective profiles, but they should not become first-class control-flow boundaries in the runtime.
 
 ## V1 Completion Status
 
@@ -38,11 +50,11 @@ This document captures the coding workflow capability that makes SOP feel like a
 - ✅ RepoIndexer for searchable repository structure
 - ✅ ValidationOrchestrator for KB quality enforcement
 
-**Workflow Orchestrators** (All Multi-Step, Infrastructure-Backed):
-- ✅ **Test Fix Workflow** (7 steps): analyze → isolate → patch → validate → test → iterate → document
-- ✅ **Architecture Workflow** (5 steps): analyze → map → design → validate → document
-- ✅ **Documentation Workflow** (4 steps): analyze → extract → generate → review
-- ✅ **Implementation Workflow** (3 steps): plan → implement → validate
+**Validated Objective Profiles** (Current behavior, not separate controllers):
+- ✅ Test repair profile: analyze → isolate → patch → validate → test → iterate → document
+- ✅ Architecture/design profile: analyze → map → design → validate → document
+- ✅ Documentation profile: analyze → extract → generate → review
+- ✅ Implementation profile: plan → implement → validate
 
 **Routing & Classification**:
 - ✅ Fast-path keyword routing (80%+ queries, zero LLM calls)
@@ -56,6 +68,13 @@ This document captures the coding workflow capability that makes SOP feel like a
 - ✅ Technical spec writing
 - ✅ Planning and proposal workflows
 
+**Artifact Inventory Foundation**:
+- ✅ AST/tree-sitter-backed symbol and structure extraction
+- ✅ Repo-aware context packs with files, tests, imports, dependency files, and structural paths
+- ✅ Code artifact extraction from modified files for undo/restore workflows
+- ✅ First-class inventory compiler for repo artifacts, package scopes, relationship groups, and execution surfaces
+- ✅ Inventory selection and completion tools that let the model operate on one selected artifact at a time and advance the worklist
+
 **Desktop Automation**:
 - ✅ Git command execution
 - ✅ Shell/postgres/splunk automation
@@ -63,14 +82,14 @@ This document captures the coding workflow capability that makes SOP feel like a
 
 ### 🔄 Deferred to Post-V1
 
-**Data-Driven Workflows**:
-- 📋 Visual workflow builder UI
-- 📋 JSON-based workflow definitions in KB
-- 📋 Infrastructure tool registry (expose analyze_ast, generate_patch as workflow steps)
-- 📋 Team-customizable workflows
-- 📋 Workflow marketplace/sharing
+**Data-Driven Objective Profiles**:
+- 📋 Visual profile builder UI
+- 📋 JSON-based profile definitions in KB
+- 📋 Infrastructure tool registry for reusable runtime tools
+- 📋 Team-customizable objective profiles
+- 📋 Profile marketplace/sharing
 
-**Rationale**: V1 proves infrastructure-backed orchestration works. Post-V1 wraps this in a data-driven, user-customizable layer.
+**Rationale**: V1 proves infrastructure-backed orchestration works. Post-V1 should wrap this in a data-driven, user-customizable profile layer without introducing scenario-specific controllers.
 
 **Current implementation note**: The shared AST layer now supports C# parsing and symbol/import extraction for .cs files, and workflow code generation now uses a target-language abstraction with concrete Go, C#, and Python backends. The same workflow or script definition can be emitted in multiple targets, with additional language backends added as needed.
 
@@ -82,13 +101,15 @@ The coding workflow stack now integrates through the capability contract via pha
 
 This design keeps the main Ask/ReAct loop as the single authoritative execution engine while allowing coding-specific primitives to participate in a lightweight, capability-native way.
 
-**Key Enabler**: Instead of making the capability own execution flow, the Ask pipeline remains the coordinator. The capability contributes context, guidance, and structured tools for tasks such as repository inspection and context assembly, while workflow steps and more explicit sequencing can still be composed with the workflow-manager/step layer when needed.
+**Key Enabler**: Instead of making the capability own execution flow, the Ask pipeline remains the coordinator. The capability contributes context, guidance, and structured tools for tasks such as repository inspection and context assembly. The durable design goal is objective-driven execution through one generic loop, not proliferation of named workflow controllers.
 
 This means:
 - the main Ask pipeline remains the primary state machine
 - coding-workflow helpers participate through classification, context injection, and tool exposure
 - prompt context, tool outcomes, and finalization stay in a unified flow
 - workflow state is preserved without introducing a separate controller loop
+
+The next layer for this stack is an explicit artifact inventory step. Today the runtime already discovers candidate files, symbols, tests, imports, and code-artifact metadata, but it still does that as part of context assembly and transaction analysis. A dedicated inventory tool would make that discovery output reusable as a stable worklist that later turns can consume, rather than forcing the model to reconstruct the list every time from raw repo context.
 
 For the full consolidated rationale and decision history, see [WORKFLOWS.md](WORKFLOWS.md). This implementation doc remains the product-facing companion that focuses on the coding workflow experience, while the workflow doc captures the broader architectural intent.
 
@@ -124,13 +145,39 @@ Results aggregated: "Tests passed ✓, Formatting OK ✓"
 
 **Implementation**: Wrapper around existing `Ask()` - no modifications to core orchestration logic required.
 
+### Phase 5: Artifact Inventory and Worklist Iteration
+
+This phase is now active and integrated with the existing phase-plan orchestration.
+
+**Implemented**:
+- AST/tree-sitter symbol extraction in `ContextManager`
+- `CodeArtifactExtractor` for modified files in undo/restore flows
+- `WorkInventory` / `InventoryItem` as a generic progress-tracking structure
+- `ContextPack` fields such as `RepositoryFiles`, `RelatedFiles`, `TestFiles`, `DependencyFiles`, `Symbols`, `ASTLeafNodes`, and `StructuralPath`
+- `compile_artifact_inventory` to emit a canonical inventory from repo context
+- `select_inventory_item` and `complete_inventory_item` to work through the inventory one item at a time
+- persistence of the compiled inventory so it survives across turns and is hydrated back into the workstream
+- package-scoped, relationship-scoped, and execution-surface grouping to make the inventory more actionable than a raw file list
+
+**Design intent**: objective first, inventory next, then worklist execution. The model should not rediscover the same candidate artifacts on every turn; instead it should operate on a bounded inventory and advance a single active item at a time.
+
+The important boundary is that `fix failing tests` is not a bespoke runtime path. It is a repair-oriented objective profile that happens to prioritize test failures, diagnostics, related symbols, and validation loops. The same controller and state model should also handle codebase analysis, feature implementation, and design work.
+
+**Integration model**:
+- The phase plan remains internal execution metadata, not a user-facing workflow contract.
+- The artifact inventory is the micro worklist inside the active objective context.
+- Ask/ReAct keeps orchestrating tool calls; the selected inventory item is the concrete execution boundary for reads, edits, and validation.
+- State is explicit and persisted in workstream artifacts rather than hidden behind `context.Context` values.
+
 ## Task-Mode Coding Runtime
 
-The current coding Ask runtime should be understood as task-mode-oriented even though some internal capability implementations still use phase terminology for continuity and compatibility.
+The current coding Ask runtime should be understood as objective-oriented even though some internal capability implementations still use phase terminology for continuity and compatibility.
 
 For the next milestone that reconnects strong LLM-authored planning with workstream execution and crash-safe resume, see [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md).
 
 Task-mode wording should be treated as a compatibility framing, not as the only valid architecture. The stronger design goal is that phase state remains internal execution context while Ask keeps working through the current step and adjacent local work without unnecessary visible phase hops.
+
+The practical architecture test is simple: `fix failing tests`, `analyze this codebase`, and `implement this feature` should all run through the same controller, the same state model, and the same item-selection loop. Only ranking, evidence gathering, and completion criteria should vary by objective profile.
 
 ### Live Ask runtime contract
 
@@ -148,9 +195,9 @@ For coding tasks, the live prompt and tool surface should prefer two runtime mod
 Implementation should be read as a write-capable runtime bundle, not as proof that the task is ready to patch immediately. The current routing contract now distinguishes:
 
 - `single_turn` asks: narrow, obvious, local changes that can complete without workflow ceremony
-- `managed_workflow` asks: bug fixes, repo-wide test repair, multi-file features, or refactors that need discovery or planning before editing
+- `managed_objective` asks: bug fixes, repo-wide test repair, multi-file features, or refactors that need discovery or planning before editing
 
-For managed workflow coding asks, implementation-mode wording may still be active at the top level while the internal phase begins in `investigation` or `planning`. This is deliberate. The runtime should expose enough discovery/planning surface to ground the change before it enters execution.
+For managed objective coding asks, implementation-mode wording may still be active at the top level while the internal phase begins in `investigation` or `planning`. This is deliberate. The runtime should expose enough discovery/planning surface to ground the change before it enters execution.
 
 **Prompt rule**: phase semantics are internal metadata for continuity; the live coding prompt should steer the model with runtime-mode wording rather than teaching a full SDLC phase taxonomy on every turn.
 
@@ -158,7 +205,7 @@ Equivalent future implementation: once phase-aligned prompt context and tool sur
 
 **Routing rule**: for coding tasks, the live routing hint should also use runtime-mode values (`discovery` or `implementation`) instead of phase names. Internal phase IDs remain useful for stored artifacts, compatibility with older workstreams, and specialized capability logic, but they should not be the primary live Ask control primitive.
 
-**Execution-readiness rule**: implementation-oriented asks should only start in execution when the first concrete change is already known. Requests such as `fix failing tests` should normally be treated as managed workflow and start in investigation, even though the eventual task mode is still implementation-oriented.
+**Execution-readiness rule**: implementation-oriented asks should only start in execution when the first concrete change is already known. Requests such as `fix failing tests` should normally be treated as managed objective execution and start in investigation, even though the eventual task mode is still implementation-oriented.
 
 ## Internal Phase-as-Capability Model
 

@@ -72,12 +72,11 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 }
 
 func (c *PlannerCapability) BuildContext(query string, state capabilities.RoutingState) string {
-	return "Available workflow support:\n- Plan tasks that benefit from structured approach\n- For coding: understand problem → design if needed → implement\n- Keep workflow simple unless task complexity requires explicit planning\n- Tools available vary based on what you're doing (reading vs writing code)"
+	return "Coding workflow guidance:\n- discovery phase: inspect the repo, gather evidence, and narrow the actual failure or root cause.\n- implementation phase: apply the minimal change once the root cause is clear.\n- Keep the runtime in a continuous Ask/ReAct transaction unless the task truly benefits from a persisted phase plan."
 }
 
 func (c *PlannerCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	// Tools describe themselves - no need for duplicate guidance
-	return ""
+	return "do not force a full SDLC phase plan for routine coding tasks. Use a two-mode runtime: discovery and implementation. create_phase_plan only when the task is genuinely multi-step, shared across turns, or needs explicit checkpoints beyond the normal Ask/ReAct loop."
 }
 
 func (c *PlannerCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {

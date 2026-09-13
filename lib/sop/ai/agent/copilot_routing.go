@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -130,9 +131,7 @@ func (a *CopilotAgent) persistRoutingState(ctx context.Context, taskCtx *TaskCon
 	}
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
-		if !isTestMode() {
-			panic("saveClassificationToContext: SessionPayload required to save routing state. Enable test mode via EnableTestMode() for tests.")
-		}
+		slog.Warn("persistRoutingState: no session payload available; skipping persisted routing state")
 		return
 	}
 	if p.Variables == nil {
@@ -263,7 +262,7 @@ func (a *CopilotAgent) activeCodingWorkstreamContinuationTaskContext(query strin
 	}
 	askCtx.Domains = []string{"coding_workflow"}
 	askCtx.TaskShape = taskShapeIssueInvestigation
-	askCtx.OrchestrationLevel = orchestrationManagedWorkflow
+	askCtx.OrchestrationLevel = orchestrationManagedObjective
 	askCtx.Phase = currentPhase
 	askCtx.PhasePlan = plannedPhases
 	askCtx.Intent = "generate_code"

@@ -236,7 +236,7 @@ func TestEvaluatePhaseTransactionCognitiveDecision_QueuesPlanningAfterFailingTes
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -268,7 +268,7 @@ func TestEvaluatePhaseTransactionCognitiveDecision_QueuesPlanningWhenExecutionLa
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -297,7 +297,7 @@ func TestEvaluatePhaseTransactionCognitiveDecision_RequeuesExecutionWhenValidati
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -332,7 +332,7 @@ func TestEvaluatePhaseTransactionCognitiveDecision_QueuesExecutionWhenPlanningAr
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "planning",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",

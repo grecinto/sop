@@ -72,9 +72,18 @@ const (
 	taskShapeRefactorCampaign   = "refactor_campaign"
 	taskShapeMultiDomain        = "multi_domain_workflow"
 
-	orchestrationSingleTurn      = "single_turn"
-	orchestrationManagedWorkflow = "managed_workflow"
+	orchestrationSingleTurn       = "single_turn"
+	orchestrationManagedObjective = "managed_objective"
 )
+
+func isManagedOrchestrationLevel(level string) bool {
+	switch strings.TrimSpace(strings.ToLower(level)) {
+	case orchestrationManagedObjective:
+		return true
+	default:
+		return false
+	}
+}
 
 // ClassifyAskTaskContext performs enhanced LLM-based classification that returns:
 // 1. Domain(s) - Can be multiple (e.g., ["stores", "spaces"])
@@ -202,7 +211,7 @@ Analyze the query and return a JSON object with this structure:
 {
   "domains": ["domain1", "domain2"],  // One or more domains (can be multiple)
 	"task_shape": "shape_name",          // direct_answer|direct_action|issue_investigation|design_or_feature|refactor_campaign|multi_domain_workflow
-	"orchestration_level": "level",      // single_turn|managed_workflow
+	"orchestration_level": "level",      // single_turn|managed_objective
   "phase": "phase_name",              // Current phase for this query
   "phase_plan": ["phase1", "phase2"], // Full sequence of phases (can be single phase)
   "intent": "intent_category",        // High-level intent
@@ -235,10 +244,10 @@ Analyze the query and return a JSON object with this structure:
 
 4a. **Task shape and orchestration level**:
 	- Use "single_turn" only when the next action is obvious, narrow, and easy to validate.
-	- Use "managed_workflow" when the ask needs diagnosis, sequencing, tradeoffs, or more than one meaningful step.
-	- Issue-oriented asks such as "fix failing tests" or "debug why" should normally be task_shape="issue_investigation" and orchestration_level="managed_workflow".
-	- Design/architecture/approach asks should normally be task_shape="design_or_feature" and orchestration_level="managed_workflow".
-	- Refactor asks that span multiple files or invariants should normally be task_shape="refactor_campaign" and orchestration_level="managed_workflow".
+	- Use "managed_objective" when the ask needs diagnosis, sequencing, tradeoffs, or more than one meaningful step.
+	- Issue-oriented asks such as "fix failing tests" or "debug why" should normally be task_shape="issue_investigation" and orchestration_level="managed_objective".
+	- Design/architecture/approach asks should normally be task_shape="design_or_feature" and orchestration_level="managed_objective".
+	- Refactor asks that span multiple files or invariants should normally be task_shape="refactor_campaign" and orchestration_level="managed_objective".
 	- Set execution_ready=true only when the first concrete change is already known; write intent alone is not enough.
 
 4b. **Coding workflow uses active phases only**:
@@ -286,7 +295,7 @@ Query: "The current folder ../lib/sop, fix failing tests under this folder."
 {
   "domains": ["coding_workflow"],
 	"task_shape": "issue_investigation",
-	"orchestration_level": "managed_workflow",
+	"orchestration_level": "managed_objective",
 	"phase": "investigation",
 	"phase_plan": ["investigation", "planning", "execution"],
   "intent": "generate_code",
@@ -407,7 +416,7 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	if result.Phase == "" {
 		result.Phase = "investigation" // Default to investigation
 	}
-	if result.OrchestrationLevel == orchestrationManagedWorkflow {
+	if isManagedOrchestrationLevel(result.OrchestrationLevel) {
 		result.Phase = chooseManagedWorkflowPhase(result)
 	}
 
@@ -429,7 +438,7 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	if !contains(result.PhasePlan, result.Phase) {
 		result.PhasePlan = append([]string{result.Phase}, result.PhasePlan...)
 	}
-	if result.OrchestrationLevel == orchestrationManagedWorkflow {
+	if isManagedOrchestrationLevel(result.OrchestrationLevel) {
 		if len(result.PhasePlan) == 0 || askClassificationHasDomain(result.Domains, "coding_workflow") {
 			result.PhasePlan = defaultPhasePlanForAsk(result)
 		}
@@ -478,11 +487,11 @@ func inferAskTaskShape(result AskTaskContext) string {
 
 func inferAskOrchestrationLevel(result AskTaskContext) string {
 	if len(result.PhasePlan) > 1 {
-		return orchestrationManagedWorkflow
+		return orchestrationManagedObjective
 	}
 	switch result.TaskShape {
 	case taskShapeIssueInvestigation, taskShapeDesignOrFeature, taskShapeRefactorCampaign, taskShapeMultiDomain:
-		return orchestrationManagedWorkflow
+		return orchestrationManagedObjective
 	default:
 		return orchestrationSingleTurn
 	}
@@ -515,7 +524,7 @@ func chooseManagedWorkflowPhase(result AskTaskContext) string {
 }
 
 func defaultPhasePlanForAsk(result AskTaskContext) []string {
-	if result.OrchestrationLevel != orchestrationManagedWorkflow {
+	if !isManagedOrchestrationLevel(result.OrchestrationLevel) {
 		return []string{result.Phase}
 	}
 	if askClassificationHasDomain(result.Domains, "coding_workflow") {

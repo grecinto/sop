@@ -223,8 +223,8 @@ func TestNormalizeAskTaskContext_ClearCodingQueryDoesNotNeedOffer(t *testing.T) 
 	if ctx.TaskShape != taskShapeIssueInvestigation {
 		t.Fatalf("expected repo-fix ask to classify as issue investigation, got %q", ctx.TaskShape)
 	}
-	if ctx.OrchestrationLevel != orchestrationManagedWorkflow {
-		t.Fatalf("expected repo-fix ask to require managed workflow, got %q", ctx.OrchestrationLevel)
+	if ctx.OrchestrationLevel != orchestrationManagedObjective {
+		t.Fatalf("expected repo-fix ask to require managed objective, got %q", ctx.OrchestrationLevel)
 	}
 	if ctx.Phase != "investigation" {
 		t.Fatalf("expected repo-fix ask to start in investigation, got %q", ctx.Phase)
@@ -244,6 +244,25 @@ func TestNormalizeAskTaskContext_ClearDesktopQueryDoesNotNeedOffer(t *testing.T)
 	}
 	if ctx.DomainOfferNeeded {
 		t.Fatal("did not expect clear desktop query to require a domain offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_AcceptsManagedObjectiveLevel(t *testing.T) {
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		OriginalQuery:      "fix failing tests in the parser package",
+		OrchestrationLevel: "managed_objective",
+		Phase:              "investigation",
+	})
+	if ctx.OrchestrationLevel != orchestrationManagedObjective {
+		t.Fatalf("expected managed_objective to remain canonical, got %q", ctx.OrchestrationLevel)
+	}
+	if ctx.Phase != "investigation" {
+		t.Fatalf("expected repo-fix ask to start in investigation, got %q", ctx.Phase)
+	}
+	if got := strings.Join(ctx.PhasePlan, ","); got != "investigation,planning,execution" {
+		t.Fatalf("expected objective-driven repo-fix plan to include investigation, planning, execution, got %s", got)
 	}
 }
 
@@ -338,11 +357,11 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsExecutionPhase(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 
-	if !toolNames["execution_run_tests"] {
-		t.Fatalf("expected execution phase to expose execution_run_tests, got %v", toolNames)
+	if !toolNames["run_tests"] {
+		t.Fatalf("expected execution phase to expose run_tests, got %v", toolNames)
 	}
-	if !toolNames["execution_apply_patch"] {
-		t.Fatalf("expected execution phase to expose execution_apply_patch, got %v", toolNames)
+	if !toolNames["apply_patch"] {
+		t.Fatalf("expected execution phase to expose apply_patch, got %v", toolNames)
 	}
 	if toolNames["investigation_inspect_repo"] {
 		t.Fatalf("did not expect execution phase to expose investigation tools, got %v", toolNames)
@@ -363,7 +382,7 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning"},
 		Intent:             "analyze",
@@ -378,11 +397,14 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.
 		toolNames[tool.Name] = true
 	}
 
-	if !toolNames["investigation_search_repo"] {
-		t.Fatalf("expected investigation phase to expose investigation tools, got %v", toolNames)
+	if !toolNames["search_repo"] {
+		t.Fatalf("expected investigation phase to expose search_repo, got %v", toolNames)
 	}
-	if !toolNames["investigation_run_tests"] {
-		t.Fatalf("expected investigation phase to expose investigation_run_tests, got %v", toolNames)
+	if !toolNames["run_tests"] {
+		t.Fatalf("expected investigation phase to expose run_tests, got %v", toolNames)
+	}
+	if !toolNames["compile_artifact_inventory"] {
+		t.Fatalf("expected investigation phase to expose compile_artifact_inventory, got %v", toolNames)
 	}
 	// After simplification: Only current phase tools are exposed (no look-ahead to planning/execution)
 	if toolNames["planning_plan_changes"] {
@@ -397,7 +419,7 @@ func TestResolveActiveCodingRuntimePhase_ManagedWorkflowRepoFixStaysInInvestigat
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -421,7 +443,7 @@ func TestResolvePhasePlan_PromotesManagedCodingExecutionWhenPlanningArtifactIsRe
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -550,7 +572,7 @@ func TestResolvePhasePlan_SyncsCurrentIndexFromQueuedPhaseActor(t *testing.T) {
 		Domains:            []string{"coding_workflow"},
 		Phase:              "planning",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		OriginalQuery:      "fix failing tests",
 	})
 
@@ -711,7 +733,7 @@ func TestBuildPhasePrompt_IncludesPhaseTransactionHandoff(t *testing.T) {
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "planning",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1333,7 +1355,7 @@ func TestApplyQueuedPhaseActorContext_PromotesExecutionReadyFromPlanningArtifact
 	persisted := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		OriginalQuery:      "fix failing tests in the repository",
@@ -1409,7 +1431,7 @@ func TestEvaluatePhaseTransaction_QueuesPlanningAfterFailingTestInvestigation(t 
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1447,7 +1469,7 @@ func TestEvaluatePhaseTransaction_DoesNotQueuePlanningWithoutFailingEvidence(t *
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1465,7 +1487,7 @@ func TestEvaluatePhaseTransaction_QueuesPlanningWhenExecutionLacksReadyArtifact(
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1491,7 +1513,7 @@ func TestEvaluatePhaseTransaction_QueuesExecutionWhenPlanningArtifactIsReady(t *
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "planning",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1528,7 +1550,7 @@ func TestMaybePersistPlanningArtifactFromFinalText_EnablesExecutionTransition(t 
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "planning",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1557,7 +1579,7 @@ func TestEvaluatePhaseTransaction_RequeuesExecutionWhenValidationEvidenceIsMissi
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1602,7 +1624,7 @@ func TestEvaluatePhaseTransaction_AllowsExecutionCompletionWhenValidationEvidenc
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "execution",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",
@@ -1621,7 +1643,7 @@ func TestEvaluatePhaseTransaction_DoesNotUseClarificationReplyAsContinuationReas
 	classification := &AskTaskContext{
 		Domains:            []string{"coding_workflow"},
 		TaskShape:          taskShapeIssueInvestigation,
-		OrchestrationLevel: orchestrationManagedWorkflow,
+		OrchestrationLevel: orchestrationManagedObjective,
 		Phase:              "investigation",
 		PhasePlan:          []string{"investigation", "planning", "execution"},
 		Intent:             "generate_code",

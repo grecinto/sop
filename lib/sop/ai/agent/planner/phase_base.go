@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	log_slog "log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -309,9 +310,12 @@ func (b *BasePhase) BuildGuidanceProfile(query string, state capabilities.Routin
 // Common helper methods
 
 func (b *BasePhase) phaseToolName(suffix string) string {
-	// Phases are internal orchestration - LLM should not see phase prefixes
-	// Return clean tool name; phase routing handled by registry internally
-	return suffix
+	// Preserve phase-qualified tool names for tool routing and compatibility with
+	// the Ask pipeline, which expects names like investigation_inspect_repo.
+	if strings.TrimSpace(b.phaseID) == "" {
+		return suffix
+	}
+	return b.phaseID + "_" + suffix
 }
 
 func (b *BasePhase) ensureSharedInfrastructure() *SharedInfrastructure {
@@ -479,6 +483,141 @@ func shouldRequireRootCauseEvidence(artifact phaseArtifact) bool {
 		}
 	}
 	return false
+}
+
+func isRepairTaskForDiagnosis(summary string, plan []string, evidence []string) bool {
+	textParts := []string{summary}
+	textParts = append(textParts, plan...)
+	textParts = append(textParts, evidence...)
+	text := strings.ToLower(strings.Join(textParts, " "))
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	issueSignals := []string{"issue", "problem", "failure", "failing", "failed", "bug", "error", "regression", "broken", "crash", "exception", "panic", "incorrect", "wrong", "fault"}
+	for _, signal := range issueSignals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func clusterFailureEvidence(messages []string) []map[string]any {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	clusters := map[string][]string{}
+	for _, message := range messages {
+		norm := strings.TrimSpace(message)
+		if norm == "" || strings.Contains(strings.ToLower(norm), " passed") || strings.Contains(strings.ToLower(norm), " ok ") {
+			continue
+		}
+		key := failureClusterKey(norm)
+		if key == "" {
+			key = "general_failure"
+		}
+		clusters[key] = append(clusters[key], norm)
+	}
+	if len(clusters) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(clusters))
+	for key, members := range clusters {
+		if len(members) < 2 {
+			continue
+		}
+		sort.Strings(members)
+		result = append(result, map[string]any{"signature": key, "members": members})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, _ := result[i]["signature"].(string)
+		right, _ := result[j]["signature"].(string)
+		return left < right
+	})
+	return result
+}
+
+func failureClusterKey(message string) string {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, marker := range []string{"failed with", "failed:", "failure:", "error:"} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			detail := strings.TrimSpace(lower[idx+len(marker):])
+			if detail == "" {
+				continue
+			}
+			if idx := strings.Index(detail, "\n"); idx >= 0 {
+				detail = detail[:idx]
+			}
+			if detail == "" {
+				continue
+			}
+			return detail
+		}
+	}
+	if idx := strings.Index(lower, "expected"); idx >= 0 {
+		return strings.TrimSpace(lower[idx:])
+	}
+	if idx := strings.Index(lower, "panic"); idx >= 0 {
+		return strings.TrimSpace(lower[idx:])
+	}
+	return strings.TrimSpace(lower)
+}
+
+func diagnosisFieldsMissing(structuredData map[string]any) []string {
+	if structuredData == nil {
+		return []string{"root_cause", "evidence", "fix_target", "shared_with", "blast_radius"}
+	}
+
+	diagnosis := map[string]any{}
+	if nested, ok := structuredData["diagnosis"].(map[string]any); ok {
+		diagnosis = nested
+	} else {
+		diagnosis = structuredData
+	}
+
+	missing := make([]string, 0, 5)
+	rootCause := diagnosis["root_cause"]
+	if rootCause == nil || strings.TrimSpace(fmt.Sprint(rootCause)) == "" || strings.TrimSpace(fmt.Sprint(rootCause)) == "<nil>" {
+		missing = append(missing, "root_cause")
+	}
+
+	evidence := diagnosis["evidence"]
+	if evidence == nil {
+		missing = append(missing, "evidence")
+	} else {
+		switch v := evidence.(type) {
+		case []string:
+			if len(v) == 0 {
+				missing = append(missing, "evidence")
+			}
+		case []any:
+			if len(v) == 0 {
+				missing = append(missing, "evidence")
+			}
+		default:
+			if strings.TrimSpace(fmt.Sprint(v)) == "" || strings.TrimSpace(fmt.Sprint(v)) == "<nil>" {
+				missing = append(missing, "evidence")
+			}
+		}
+	}
+
+	fixTarget := diagnosis["fix_target"]
+	if fixTarget == nil || strings.TrimSpace(fmt.Sprint(fixTarget)) == "" || strings.TrimSpace(fmt.Sprint(fixTarget)) == "<nil>" {
+		missing = append(missing, "fix_target")
+	}
+
+	sharedWith := diagnosis["shared_with"]
+	if sharedWith == nil || strings.TrimSpace(fmt.Sprint(sharedWith)) == "" || strings.TrimSpace(fmt.Sprint(sharedWith)) == "<nil>" {
+		missing = append(missing, "shared_with")
+	}
+
+	blastRadius := diagnosis["blast_radius"]
+	if blastRadius == nil || strings.TrimSpace(fmt.Sprint(blastRadius)) == "" || strings.TrimSpace(fmt.Sprint(blastRadius)) == "<nil>" {
+		missing = append(missing, "blast_radius")
+	}
+	return missing
 }
 
 func requireRootCauseEvidence(artifact phaseArtifact, workstream WorkStreamContextReader) error {
@@ -697,7 +836,7 @@ func captureToolSchema() string {
     "transition_from": {"type": "string", "description": "Previous phase ID"},
     "transition_direction": {"type": "string", "description": "Transition direction: forward|backward"},
     "exit": {"type": "boolean", "description": "Set true to signal phase completion and workflow exit"},
-    "structured_data": {"type": "object", "description": "Phase-specific structured data (test results, findings objects, metrics, etc.)"}
+    "structured_data": {"type": "object", "description": "Phase-specific structured data (diagnosis objects, test results, findings objects, metrics, etc.)"}
   }
 }`
 }

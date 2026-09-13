@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -147,10 +148,10 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 			var progressDisplay string
 			var trackerTitle string
 
-			if thread.StreamContext.WorkInventory != nil && len(thread.StreamContext.WorkInventory.Items) > 0 {
+			if inventory := workInventoryForDisplay(thread); inventory != nil && len(inventory.Items) > 0 {
 				// New generic path
-				progressDisplay = formatWorkInventoryProgress(thread.StreamContext.WorkInventory)
-				trackerTitle = getProgressTrackerTitle(thread.StreamContext.WorkInventory.InventoryType)
+				progressDisplay = formatWorkInventoryProgress(inventory)
+				trackerTitle = getProgressTrackerTitle(inventory.InventoryType)
 			} else if thread.StreamContext.FailureInventoryCaptured && len(thread.StreamContext.FailureClusters) > 0 {
 				// Legacy path (backward compatibility)
 				progressDisplay = formatFailureClusterProgress(
@@ -181,6 +182,69 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func workInventoryForDisplay(thread *ConversationThread) *WorkInventory {
+	if thread == nil || thread.StreamContext == nil {
+		return nil
+	}
+	if thread.StreamContext.WorkInventory != nil && len(thread.StreamContext.WorkInventory.Items) > 0 {
+		return thread.StreamContext.WorkInventory
+	}
+	if inventory := workInventoryFromPhaseArtifacts(thread.StreamContext.PhaseArtifacts); inventory != nil && len(inventory.Items) > 0 {
+		thread.StreamContext.WorkInventory = inventory
+		return inventory
+	}
+	return nil
+}
+
+func workInventoryFromPhaseArtifacts(phaseArtifacts map[string]map[string]any) *WorkInventory {
+	if len(phaseArtifacts) == 0 {
+		return nil
+	}
+	for _, artifact := range phaseArtifacts {
+		if inventory := workInventoryFromArtifact(artifact); inventory != nil && len(inventory.Items) > 0 {
+			return inventory
+		}
+	}
+	return nil
+}
+
+func workInventoryFromArtifact(artifact map[string]any) *WorkInventory {
+	if len(artifact) == 0 {
+		return nil
+	}
+	for _, key := range []string{"artifact_inventory", "work_inventory"} {
+		if raw, ok := artifact[key]; ok {
+			if inventory := workInventoryFromSnapshot(raw); inventory != nil && len(inventory.Items) > 0 {
+				return inventory
+			}
+		}
+	}
+	if _, ok := artifact["items"]; ok {
+		if inventory := workInventoryFromSnapshot(artifact); inventory != nil && len(inventory.Items) > 0 {
+			return inventory
+		}
+	}
+	return nil
+}
+
+func workInventoryFromSnapshot(snapshot any) *WorkInventory {
+	if snapshot == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil
+	}
+	var inventory WorkInventory
+	if err := json.Unmarshal(bytes, &inventory); err != nil {
+		return nil
+	}
+	if len(inventory.Items) == 0 {
+		return nil
+	}
+	return &inventory
 }
 
 // formatWorkInventoryProgress creates a visual checklist for any work inventory

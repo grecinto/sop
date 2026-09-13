@@ -2,15 +2,15 @@
 
 **Created**: 2026-07-30  
 **Status**: Design Complete - Implementation Pending  
-**Purpose**: Extend Phase Plan System to work across ALL domains (Stores, Spaces, Desktop, Coding)
+**Purpose**: Extend Phase Plan System to work across ALL domains (Stores, Spaces, Desktop, Coding) while keeping Ask/ReAct as a generic objective-driven runtime.
 
 ---
 
 ## Executive Summary
 
-The Phase Plan System currently works only for `coding_workflow` domain due to hardcoded domain gates in `PlannerCapability` and `PhaseCapability`. This document describes the architectural evolution to make Phases universal while surfacing domain-specific tools.
+The Phase Plan System currently works only for `coding_workflow` domain due to hardcoded domain gates in `PlannerCapability` and `PhaseCapability`. This document describes the architectural evolution to make phases universal while surfacing domain-specific tools without turning user scenarios into separate controllers.
 
-**Key Insight**: The Planner generates domain-agnostic PhasePlans. The Phase capabilities surface domain-appropriate tools when they execute.
+**Key Insight**: The Planner generates domain-agnostic phase plans as internal execution metadata. The phase capabilities surface domain-appropriate tools when they execute, but the user request still selects an objective, not a workflow.
 
 ### Current State (Limitations)
 
@@ -51,7 +51,7 @@ BuildExecutionContext(ExecutionContextInput{
 ### Target State (Benefits)
 
 ✅ **Universal Planner** - Works for coding, stores, spaces, desktop, ANY domain  
-✅ **Methodical Workflows** - Investigation → Planning → Execution for ALL domains  
+✅ **Objective-Driven Progression** - Investigation → Planning → Execution for ALL domains when useful  
 ✅ **Domain-Specific Tools** - Investigation in Stores ≠ Investigation in Coding  
 ✅ **Better Success Rate** - Structured approach vs random tool calls  
 ✅ **Flexible Plans** - 1-phase to 6-phase based on task complexity  
@@ -64,6 +64,14 @@ BuildExecutionContext(ExecutionContextInput{
 For the next-step design that makes the planner LLM-authored, persists structured plans in workstream state, and executes them step-by-step across domains, see [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md).
 
 ### Principle: Separation of Concerns
+
+Architecture rule:
+
+- A user request selects an objective, not a named workflow.
+- Ask/ReAct remains the only controller.
+- Phase plans are internal reasoning and continuity structures.
+- Domain tools, AST/tree-sitter, search, diagnostics, and inventories are reusable ingredients.
+- Differences between tasks should be expressed as objective-level prioritization and completion criteria, not as separate orchestration paths.
 
 **Planner** (Universal):
 - Generates PhasePlan sequences based on query semantics
@@ -101,7 +109,7 @@ Plan: ["execution"]  # No investigation/planning needed
 ```
 Query: "Show stores where status=active"
 Domain: stores
-Plan: ["investigation", "execution"]  # Minimal workflow
+Plan: ["investigation", "execution"]  # Minimal objective progression
 ```
 
 **Thick Planning** (Full SDLC):
@@ -110,6 +118,8 @@ Query: "Refactor authentication to use OAuth2"
 Domain: coding_workflow
 Plan: ["intake", "investigation", "planning", "execution", "review", "delivery"]
 ```
+
+These examples should not be interpreted as separate workflow implementations. They are examples of how a single generic controller may choose thicker or thinner internal progression for different objectives.
 
 **Patch Only**:
 ```

@@ -5,6 +5,43 @@
 - The CLI now acts as a thin client over HTTP server endpoints for admin operations.
 - The admin users page and JSON API are wired and tested.
 - The federation and fleet-intelligence work is now implemented and verified end to end.
+- The current coding runtime is now centered on a generic objective-driven work inventory instead of a workflow-specific runtime.
+- The repo inventory compiler is task-scoped and resumes correctly from the active inventory item.
+
+## 2026-09-09: Objective-driven work inventory runtime (ACTIVE)
+
+### What was completed
+- Canonicalized orchestration naming to `managed_objective` in the Ask runtime and classification flow.
+- Removed the stale `managed_workflow` naming and aligned tests/docs to the objective-managed runtime.
+- Kept the generic Ask/ReAct loop as the single controller; capabilities remain passive participants.
+- Implemented objective-scoped metadata on compiled artifact inventories:
+  - `objective`
+  - `objective_profile`
+- Kept inventory selection/completion behavior generic across repo analysis, repair, and implementation tasks.
+- Fixed a real runtime issue where routing state persistence would panic without a session payload; it now logs and continues safely when no payload is present.
+
+### Key implementation files
+- lib/sop/ai/agent/copilot_routing.go
+- lib/sop/ai/agent/ask_task_context.go
+- lib/sop/ai/agent/planner/phase_coding.go
+- lib/sop/ai/agent/memory_shortterm.go
+- lib/sop/ai/agent/focused_context.go
+- docs/WORK_INVENTORY_GENERALIZATION.md
+
+### Verified status
+Verified with:
+- go test ./lib/sop/ai/agent -run 'TestAskCore_RejectsLocalOnlyWorkflowWhenDisabled|TestAskCore_ResumesClarificationFlow|TestNormalizeAskTaskContext_AcceptsManagedObjectiveLevel|TestNormalizeAskTaskContext_ClearCodingRepoFixDoesNotNeedOffer'
+- go test ./lib/sop/ai/agent/planner -run 'TestCodingPhaseBuildArtifactInventory_UsesContextSignals|TestCodingPhaseBuildArtifactInventory_AddsRelationshipGroups|TestCodingPhaseBuildArtifactInventory_PrioritizesPackageScope|TestCodingPhaseBuildArtifactInventory_TracksExecutionSurfaceEdges|TestResolveTaskActiveFileFromInventory_UsesSelectedArtifactWhenExplicitFileMissing|TestCodingPhaseBuildTask_UsesActiveInventoryFileWhenNoActiveFileProvided|TestArtifactInventorySelectionAndCompletion_AdvancesActiveItem'
+
+Result:
+- ask pipeline regression tests passed
+- coding inventory regression tests passed
+- objective-scoped runtime continues to behave as a generic worklist model
+
+### Next resume point
+- Persist the active objective and inventory state across longer turns more explicitly in the session payload / stream context.
+- Extend the objective profile layer so repair, design, analysis, and implementation share the same runtime but vary ranking and completion rules.
+- Treat `fix failing tests` as one objective profile inside the same inventory-driven controller, not as a specialized workflow branch.
 
 ## What was completed
 - Added a standalone admin command wrapper in tools/sopadmin.

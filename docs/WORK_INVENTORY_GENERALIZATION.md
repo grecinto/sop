@@ -2,7 +2,29 @@
 
 ## What Was Done
 
-Generalized the test-failure-specific `FailureClusters` pattern to work across ALL domains.
+Generalized the test-failure-specific `FailureClusters` pattern to work across ALL domains, and then extended it into a repo-aware inventory compiler for coding tasks.
+
+The important refinement is that this is not a task-specific workflow primitive. The runtime remains generic, and the inventory is the objective-scoped work model that runtime operates on.
+
+The current architecture now treats the phase plan as the macro controller and the work inventory as the per-phase execution substrate:
+
+- Phase plan answers: "What is the current objective progression?"
+- Work inventory answers: "What concrete work items are active for the current objective?"
+- The Ask/ReAct loop registers the active phase tools, and the coding phase emits a persisted inventory snapshot that later turns can hydrate and continue.
+
+## Design Refinement
+
+The inventory model should be understood as a generic objective work graph, not a coding-only artifact list and not a disguised workflow.
+
+Architecture rule:
+
+- A user request selects an objective, not a workflow.
+- The Ask/ReAct loop remains the only controller.
+- AST, tree-sitter, search, diagnostics, and test discovery are reusable signal sources.
+- Inventory compilation, ranking, item selection, and completion are generic runtime operations.
+- Variations such as test repair, codebase analysis, feature implementation, or design work are profile-level differences in ranking and completion criteria, not separate orchestrators.
+
+This means an inventory item may represent a file, symbol, test failure, dependency boundary, design decision, validation task, or implementation target. Repo artifact inventories are one important compiler for this work model, not the definition of the model itself.
 
 ## Changes Made
 
@@ -68,6 +90,17 @@ func (wi *WorkInventory) MarkItemCompleted(itemID string) bool
 - `TestFormatWorkInventoryProgress_CompletedItems` - Completed items tracking
 - `TestFormatWorkInventoryProgress_DifferentInventoryTypes` - All domain titles
 - `TestFormatWorkInventoryProgress_StatusMarkers` - All status markers (◉☐✓✗⊗)
+
+### 6. **Structural Inputs Already Available for Inventory Compilation**
+
+The current coding workflow already produces the raw signals needed to compile a richer artifact inventory:
+
+- `ContextPack` carries `RepositoryFiles`, `RelatedFiles`, `TestFiles`, `DependencyFiles`, `Symbols`, `ASTLeafNodes`, and `StructuralPath`
+- `ContextManager` uses AST/tree-sitter to extract symbols and structure from active files
+- `CodeArtifactExtractor` extracts file-level code artifacts from modified files for undo and restore flows
+- `RepoIndexer` and repository search provide broader discovery beyond the active file
+
+What is still missing is a more fully generalized turn-facing compiler layer that can turn those signals into a canonical worklist the LLM can consume and update across multiple objective types.
 
 **7 legacy tests:** Unchanged, still passing for backward compatibility
 
@@ -137,7 +170,7 @@ inventory := &WorkInventory{
 
 ### Universal Pattern
 
-**Any domain can now use itemized progress tracking:**
+**Any domain can now use itemized progress tracking through the same runtime loop:**
 
 1. **Investigation phase:** Compile inventory
    ```go
@@ -182,6 +215,26 @@ inventory := &WorkInventory{
 - Deprecate `FailureClusters`, `ActiveFailureCluster`, `FailureInventoryCaptured`
 - All domains use `WorkInventory`
 
+### Phase 4: Artifact Inventory Compiler (Implemented)
+- Add a dedicated inventory tool that compiles files, symbols, tests, interfaces, configs, dependency clusters, package scopes, and execution-surface groupings into `WorkInventory`
+- Persist the compiled inventory so later turns can resume from the same worklist instead of rebuilding it from scratch
+- Add selection/update operations so the model can mark a single item active, complete it, and move to the next target
+- Use AST/tree-sitter as structural signals for item boundaries and dependency grouping, with repo search, diagnostics, and filesystem scans as supporting signals
+- Treat this compiler as one reusable provider of work items inside a generic runtime, not as a special-purpose coding workflow controller
+
+### Runtime Integration Pattern
+
+The inventory is deliberately layered under the phase plan, not instead of it:
+
+1. Ask resolves the current objective context and picks the active phase or runtime mode.
+2. The active capability exposes inventory tools to ReAct.
+3. The LLM runs `compile_artifact_inventory` or another inventory compiler to build the objective-scoped work inventory.
+4. The LLM selects the active item with `select_inventory_item`.
+5. The active item becomes the execution boundary for reads, edits, and validation.
+6. `complete_inventory_item` marks the item done and advances the list.
+
+This preserves the current Ask/ReAct flow without hiding workflow state inside `context.Context`; state is explicit in task/workstream data, phase artifacts, and the active inventory snapshot.
+
 ## Architecture Validation
 
 ✅ **Industry Aligned:** Cursor/Devin/Copilot track work items generically, not domain-specifically
@@ -218,6 +271,10 @@ PASS (7/7 legacy tests - backward compatibility preserved)
 ```
 
 ## What's Next
+
+1. Define the canonical inventory schema for objective work items so the tool output is stable across domains and repositories.
+2. Decide how compiler providers contribute inventory items for different objectives without creating scenario-specific controllers.
+3. Add tests for inventory compilation, ranking, selection, and persistence so the worklist behavior is explicit and resumable.
 
 1. **Update `copilottools.automation.go`** - Populate `WorkInventory` from test results
 2. **Add domain helpers** - Functions to create inventories for functions, bugs, files, etc.

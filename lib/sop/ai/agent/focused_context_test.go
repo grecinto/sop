@@ -1039,6 +1039,55 @@ func TestFormatFailureClusterProgress_SingleCluster(t *testing.T) {
 	}
 }
 
+func TestWorkInventoryFromPhaseArtifacts_HydratesSnapshot(t *testing.T) {
+	thread := &ConversationThread{
+		StreamContext: &WorkStreamContext{
+			PhaseArtifacts: map[string]map[string]any{
+				"execution": {
+					"artifact_inventory": map[string]any{
+						"inventory_type": "code_artifacts",
+						"active_item_id": "file:parser.go",
+						"items": []map[string]any{
+							{
+								"id":           "file:parser.go",
+								"type":         "file",
+								"display_name": "parser.go",
+								"status":       "active",
+								"metadata":     map[string]any{"file_path": "parser.go"},
+							},
+							{
+								"id":           "test:parser_test.go",
+								"type":         "test",
+								"display_name": "parser_test.go",
+								"status":       "pending",
+								"metadata":     map[string]any{"file_path": "parser_test.go"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inventory := workInventoryForDisplay(thread)
+	if inventory == nil {
+		t.Fatal("expected inventory to be hydrated from phase artifacts")
+	}
+	if inventory.InventoryType != "code_artifacts" {
+		t.Fatalf("expected inventory type code_artifacts, got %q", inventory.InventoryType)
+	}
+	if len(inventory.Items) != 2 {
+		t.Fatalf("expected 2 inventory items, got %d", len(inventory.Items))
+	}
+	if thread.StreamContext.WorkInventory == nil {
+		t.Fatal("expected hydrated inventory to be cached on stream context")
+	}
+	result := formatWorkInventoryProgress(inventory)
+	if !strings.Contains(result, "parser.go") || !strings.Contains(result, "parser_test.go") {
+		t.Fatalf("expected formatted inventory to include hydrated items, got %q", result)
+	}
+}
+
 func TestFormatFailureClusterProgress_MultipleClusters(t *testing.T) {
 	clusters := []string{
 		"package:github.com/sharedcode/sop/ai/agent",

@@ -387,13 +387,13 @@
         </h4>
         <div style="margin-bottom: 10px;">
             <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0;">
-                At least one provider key is required in the pool before the AI runtime can route requests.
+                The selected model is the default preferred model. The runtime may automatically switch to a cheaper eligible model in the pool when the task allows it while still meeting the required intelligence level.
             </p>
         </div>
         <h4 style="margin-top: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">Provider Key Pool</h4>
         <div style="margin-bottom: 10px;">
             <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0;">
-                Store keys for OpenAI, Anthropic, and Gemini in one pool so the app can choose the cheapest eligible model for the required intelligence tier.
+                Store keys for OpenAI, Anthropic, and Gemini here. The app can then route requests across the pool, preferring the cheapest eligible model that still satisfies the required intelligence tier.
             </p>
         </div>
         <div style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">

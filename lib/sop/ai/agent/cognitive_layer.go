@@ -56,10 +56,10 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		}
 		return phaseTransactionDecision{}
 	}
-	if strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) != orchestrationManagedWorkflow {
-		log.Info("Transaction evaluation: not managed_workflow",
+	if !isManagedOrchestrationLevel(classification.OrchestrationLevel) {
+		log.Info("Transaction evaluation: not managed objective",
 			"orchestration_level", classification.OrchestrationLevel,
-			"expected", orchestrationManagedWorkflow)
+			"expected", orchestrationManagedObjective)
 		return phaseTransactionDecision{}
 	}
 

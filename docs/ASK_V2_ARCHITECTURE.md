@@ -58,7 +58,7 @@ This prevents two failure modes:
 The intended control order is:
 
 1. classify the task shape
-2. decide whether the ask stays `single_turn` or becomes `managed_workflow`
+2. decide whether the ask stays `single_turn` or becomes `managed_objective`
 3. only then activate internal phase control
 
 This should be read as an implementation choice, not a permanent architectural requirement. The important invariant is that phase state remains internal execution context rather than a required conversational transport protocol. If the phase-aligned tool surfaces and prompt context become strong enough, the system can simplify away from explicit task-mode wording without reintroducing brittle phase hops.
@@ -157,7 +157,7 @@ Relevant implementation:
 The runtime now distinguishes between two orchestration levels:
 
 - `single_turn`: the next action is obvious, local, and easy to validate
-- `managed_workflow`: the ask needs diagnosis, sequencing, tradeoff analysis, or more than one meaningful step
+- `managed_objective`: the ask needs diagnosis, sequencing, tradeoff analysis, or more than one meaningful step
 
 This is the middle ground between the original phase-heavy design and the later over-ad-hoc implementation path.
 
@@ -165,11 +165,11 @@ Examples:
 
 - `rename this symbol` -> usually `single_turn`
 - `run this test` -> usually `single_turn`
-- `fix failing tests` -> usually `managed_workflow`
-- `implement this feature across the repo` -> usually `managed_workflow`
-- `refactor subsystem X` -> usually `managed_workflow`
+- `fix failing tests` -> usually `managed_objective`
+- `implement this feature across the repo` -> usually `managed_objective`
+- `refactor subsystem X` -> usually `managed_objective`
 
-When managed workflow is selected, execution should begin only when the ask is execution-ready. For issue-oriented asks, that means the system should already have a failing behavior, a root-cause hypothesis, a causal path, and a focused validation target before it treats execution as the active phase.
+When managed objective execution is selected, execution should begin only when the ask is execution-ready. For issue-oriented asks, that means the system should already have a failing behavior, a root-cause hypothesis, a causal path, and a focused validation target before it treats execution as the active phase.
 
 For coding workflow, execution readiness is no longer just a classifier opinion. The runtime can promote a managed coding ask into execution when a persisted planning artifact is present with `status=ready_for_execution`. This keeps phase entry tied to actual planning output instead of letting write-intent language skip directly into execution.
 

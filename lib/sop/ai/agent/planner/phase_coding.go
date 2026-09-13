@@ -2,10 +2,13 @@ package planner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	log "log/slog"
 
@@ -56,11 +59,13 @@ WORKFLOW: Ask questions → Build context → Document requirements → Capture 
 		return `PHASE: Investigation & Analysis
 OBJECTIVE: Discovery mode for understanding current state and finding patterns
 REQUIRED: investigation_build_context (call first)
-WORKFLOW: Build context → Inspect repo → Search patterns → Document evidence → Continue directly into implementation when the next step is clear`
+WORKFLOW: Build context → Inspect repo → Search patterns → Document evidence → Continue directly into implementation when the next step is clear
+INVENTORY RULE: If the user asks to analyze a codebase, map the repo, or fix failing tests, call compile_artifact_inventory first, then operate on a selected inventory item rather than rediscovering the whole repo each turn`
 	case "planning":
 		return `PHASE: Planning & Design
 OBJECTIVE: Discovery mode design aid when a concrete plan adds value
-WORKFLOW: Build context → Plan changes → Capture planning evidence → Continue directly into implementation when the next step is clear`
+WORKFLOW: Build context → Plan changes → Capture planning evidence → Continue directly into implementation when the next step is clear
+INVENTORY RULE: If a worklist is needed or the task is framed as fixing failing tests, compile the artifact inventory first, then pick the next item to plan or design around`
 	case "testing":
 		return `PHASE: Testing & Validation
 OBJECTIVE: Legacy validation phase for older artifacts; prefer running tests from discovery or implementation in the current coding runtime
@@ -72,6 +77,8 @@ OBJECTIVE: Implementation mode for applying changes safely in a continuous Ask/R
 
 CRITICAL: If you have test failures and source context, IMMEDIATELY generate patches. DO NOT continue investigating.
 
+SAME-TURN PIVOT RULE: If failing tests, relevant file reads, and the likely repair target are already known, transition to preview_patch immediately in this same Ask/ReAct turn. Do not wait for a separate phase handoff or queue item.
+
 WORKFLOW:
 1. IF test failures identified AND source files examined → GENERATE patches NOW (use preview_patch)
 2. IF patches previewed → Apply them (use apply_patch or apply_multi_file_patch)
@@ -80,7 +87,8 @@ WORKFLOW:
 
 SAFETY: Always preview before apply
 MULTI-FILE: Use apply_multi_file_patch for multiple related files (faster than sequential apply_patch)
-INVESTIGATION: Only gather MORE context if patches fail validation and you need additional information`
+INVESTIGATION: Only gather MORE context if patches fail validation and you need additional information
+INVENTORY RULE: If the task was compiled into an artifact inventory, or the request is to fix failing tests, work the current active item first, then mark it complete and advance to the next pending item`
 	case "review":
 		return `PHASE: Review & Validation
 OBJECTIVE: Legacy review phase for older artifacts; prefer validating inside implementation mode in the current coding runtime
@@ -225,6 +233,30 @@ func (p *CodingPhase) getCodingUniversalTools() []capabilities.ToolDefinition {
 		Name:        p.phaseToolName("index_repo_structure"),
 		Description: "Indexes repository structure using AST analysis. Returns function names, imports, and call relationships.",
 		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("compile_artifact_inventory"),
+		Description: "Compiles a structured inventory of code artifacts from repository context and stores it in the active workstream. Returns files, symbols, tests, configs, and dependency clusters.",
+		Schema:      taskSchema,
+	}, {
+		Name:        p.phaseToolName("select_inventory_item"),
+		Description: "Selects a single inventory item as the current active target so later turns can work on that item only.",
+		Schema: `{
+  "type": "object",
+  "required": ["item_id"],
+  "properties": {
+    "item_id": {"type": "string", "description": "Inventory item id or display name"}
+  }
+}`,
+	}, {
+		Name:        p.phaseToolName("complete_inventory_item"),
+		Description: "Marks a single inventory item as completed and advances to the next pending item when available.",
+		Schema: `{
+  "type": "object",
+  "required": ["item_id"],
+  "properties": {
+    "item_id": {"type": "string", "description": "Inventory item id or display name"}
+  }
+}`,
 	}}
 }
 
@@ -397,6 +429,12 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runReadFile(ctx, args)
 	case strings.ToLower(p.phaseToolName("index_repo_structure")):
 		return p.runIndexRepoStructure(ctx, args)
+	case strings.ToLower(p.phaseToolName("compile_artifact_inventory")):
+		return p.runCompileArtifactInventory(ctx, args)
+	case strings.ToLower(p.phaseToolName("select_inventory_item")):
+		return p.runSelectInventoryItem(ctx, args)
+	case strings.ToLower(p.phaseToolName("complete_inventory_item")):
+		return p.runCompleteInventoryItem(ctx, args)
 	case strings.ToLower(p.phaseToolName("plan_changes")):
 		return p.runPlanChanges(ctx, args)
 	case strings.ToLower(p.phaseToolName("run_tests")):
@@ -404,6 +442,7 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runTests(ctx, args)
 	case strings.ToLower(p.phaseToolName("preview_patch")):
 		log.Info("[PHASE EXECUTE] Executing preview_patch")
+		// Metrics recorded via copilot_prompt.go logging (Aug 31, 2026)
 		return p.runPreviewPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):
 		log.Info("[PHASE EXECUTE] Executing apply_patch")
@@ -425,6 +464,14 @@ func (p *CodingPhase) buildTask(ctx context.Context, args map[string]any) Task {
 	query := readPhaseString(args, "query", "")
 	workingDir := readPhaseString(args, "working_dir", "")
 	activeFile := readPhaseString(args, "active_file", "")
+
+	if activeFile == "" {
+		if _, snapshot, err := p.loadArtifactInventorySnapshot(); err == nil && snapshot != nil {
+			if resolved := resolveTaskActiveFileFromInventory(cw.Task{ActiveFile: activeFile, Description: query}, snapshot); resolved != "" {
+				activeFile = resolved
+			}
+		}
+	}
 
 	// Normalize and resolve working directory using session context
 	workingDir = cw.NormalizeRepoAlias(workingDir)
@@ -689,8 +736,83 @@ func (p *CodingPhase) runIndexRepoStructure(ctx context.Context, args map[string
 	return formatContextPack(pack), nil
 }
 
+func (p *CodingPhase) runCompileArtifactInventory(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
+	infra := p.ensureSharedInfrastructure()
+
+	packOps := infra.NewContextPackOperations()
+	pack, err := packOps.BuildContextForTask(task, task.State)
+	if err != nil {
+		return "", fmt.Errorf("build context for inventory: %w", err)
+	}
+
+	inventory := p.buildArtifactInventory(task, pack)
+	if err := p.persistArtifactInventorySnapshot(inventory); err != nil {
+		log.Warn("[runCompileArtifactInventory] failed to persist inventory snapshot", "error", err)
+	}
+
+	return p.formatArtifactInventoryResponse(inventory), nil
+}
+
+func (p *CodingPhase) runSelectInventoryItem(ctx context.Context, args map[string]any) (string, error) {
+	_ = ctx
+	itemID := strings.TrimSpace(readPhaseString(args, "item_id", ""))
+	if itemID == "" {
+		return "", fmt.Errorf("item_id is required")
+	}
+
+	phaseKey, inventory, err := p.loadArtifactInventorySnapshot()
+	if err != nil {
+		return "", err
+	}
+	if inventory == nil {
+		return "", fmt.Errorf("no artifact inventory has been compiled yet")
+	}
+
+	if !selectArtifactInventoryItem(inventory, itemID) {
+		return "", fmt.Errorf("inventory item %q not found", itemID)
+	}
+	if err := p.persistArtifactInventorySnapshotForPhase(phaseKey, inventory); err != nil {
+		log.Warn("[runSelectInventoryItem] failed to persist inventory snapshot", "error", err)
+	}
+
+	return p.formatArtifactInventoryResponse(inventory), nil
+}
+
+func (p *CodingPhase) runCompleteInventoryItem(ctx context.Context, args map[string]any) (string, error) {
+	_ = ctx
+	itemID := strings.TrimSpace(readPhaseString(args, "item_id", ""))
+	if itemID == "" {
+		return "", fmt.Errorf("item_id is required")
+	}
+
+	phaseKey, inventory, err := p.loadArtifactInventorySnapshot()
+	if err != nil {
+		return "", err
+	}
+	if inventory == nil {
+		return "", fmt.Errorf("no artifact inventory has been compiled yet")
+	}
+
+	if !completeArtifactInventoryItem(inventory, itemID) {
+		return "", fmt.Errorf("inventory item %q not found", itemID)
+	}
+	if err := p.persistArtifactInventorySnapshotForPhase(phaseKey, inventory); err != nil {
+		log.Warn("[runCompleteInventoryItem] failed to persist inventory snapshot", "error", err)
+	}
+
+	return p.formatArtifactInventoryResponse(inventory), nil
+}
+
 func (p *CodingPhase) runPlanChanges(ctx context.Context, args map[string]any) (string, error) {
 	task := p.buildTask(ctx, args)
+	if task.ActiveFile == "" {
+		if _, snapshot, err := p.loadArtifactInventorySnapshot(); err == nil && snapshot != nil {
+			if activeFile := resolveTaskActiveFileFromInventory(task, snapshot); activeFile != "" {
+				task.ActiveFile = activeFile
+			}
+		}
+	}
 	infra := p.ensureSharedInfrastructure()
 
 	packOps := infra.NewContextPackOperations()
@@ -782,6 +904,28 @@ func toStringSlice(values []string) []any {
 	return out
 }
 
+func resolveTaskActiveFileFromInventory(task cw.Task, snapshot map[string]any) string {
+	if task.ActiveFile != "" {
+		return normalizeInventoryPath(task.ActiveFile)
+	}
+	if len(snapshot) == 0 {
+		return ""
+	}
+	for _, item := range snapshotItems(snapshot) {
+		if activeID, _ := snapshot["active_item_id"].(string); activeID != "" && inventoryItemID(item) == activeID {
+			if path := inventoryItemFilePath(item); path != "" {
+				return normalizeInventoryPath(path)
+			}
+		}
+		if status, _ := item["status"].(string); status == "active" {
+			if path := inventoryItemFilePath(item); path != "" {
+				return normalizeInventoryPath(path)
+			}
+		}
+	}
+	return ""
+}
+
 func collectTargetFiles(task cw.Task, pack cw.ContextPack) []string {
 	files := make([]string, 0, 8)
 	if task.ActiveFile != "" {
@@ -805,9 +949,72 @@ func collectTargetFiles(task cw.Task, pack cw.ContextPack) []string {
 	return files
 }
 
+func diagnosisEvidenceStrings(structuredData map[string]any) []string {
+	if structuredData == nil {
+		return nil
+	}
+	candidate := map[string]any{}
+	if nested, ok := structuredData["diagnosis"].(map[string]any); ok {
+		candidate = nested
+	} else {
+		candidate = structuredData
+	}
+	if evidence, ok := candidate["evidence"]; ok {
+		switch v := evidence.(type) {
+		case []string:
+			return v
+		case []any:
+			out := make([]string, 0, len(v))
+			for _, item := range v {
+				if item == nil {
+					continue
+				}
+				out = append(out, fmt.Sprint(item))
+			}
+			return out
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return []string{v}
+			}
+		}
+	}
+	return nil
+}
+
 func (p *CodingPhase) runPreviewPatch(ctx context.Context, args map[string]any) (string, error) {
 	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
+
+	var diagnosisData map[string]any
+	if structData, ok := args["structured_data"].(map[string]any); ok {
+		diagnosisData = structData
+	}
+	if diagnosisData == nil {
+		artifact, err := p.loadExistingArtifact()
+		if err == nil && artifact.StructuredData != nil {
+			diagnosisData = artifact.StructuredData
+		}
+	}
+
+	if isRepairTaskForDiagnosis(task.Description, nil, nil) {
+		if missing := diagnosisFieldsMissing(diagnosisData); len(missing) > 0 {
+			message := fmt.Sprintf("DIAGNOSIS REQUIRED\nRepair task detected: %s\nMissing diagnosis fields: %s\nAdd structured_data.diagnosis with root_cause, evidence, fix_target, shared_with, and blast_radius before previewing the patch.",
+				task.Description,
+				strings.Join(missing, ", "))
+			log.Warn("Phase D hard gate: repair task preview_patch missing diagnosis values",
+				"phase", p.phaseID,
+				"task", task.Description,
+				"missing_fields", missing)
+			return "", fmt.Errorf("%s", message)
+		}
+		if clusters := clusterFailureEvidence(diagnosisEvidenceStrings(diagnosisData)); len(clusters) == 0 {
+			message := fmt.Sprintf("DIAGNOSIS REQUIRED\nRepair task detected: %s\nMissing shared failure clustering: root cause must describe which sibling failures are affected (shared_with) and the blast radius to assess downstream impact.", task.Description)
+			log.Warn("Phase D hard gate: repair task missing shared failure evidence",
+				"phase", p.phaseID,
+				"task", task.Description)
+			return "", fmt.Errorf("%s", message)
+		}
+	}
 
 	patch := readPatch(args)
 	if patch == nil {
@@ -1002,6 +1209,663 @@ func formatContextPack(pack ContextPack) string {
 		parts = append(parts, fmt.Sprintf("Repository: %s", pack.RepositorySummary))
 	}
 	return strings.Join(parts, "\n")
+}
+
+func (p *CodingPhase) buildArtifactInventory(task cw.Task, pack cw.ContextPack) map[string]any {
+	items := make([]map[string]any, 0, 32)
+	seen := make(map[string]struct{})
+	fileBuckets := make(map[string][]string)
+	counts := map[string]int{}
+	activeFile := normalizeInventoryPath(task.ActiveFile)
+	objective := strings.TrimSpace(task.Description)
+	objectiveProfile := inferObjectiveProfile(objective)
+
+	addItem := func(itemType, id, displayName, description string, metadata map[string]any) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		item := map[string]any{
+			"id":           id,
+			"type":         itemType,
+			"display_name": displayName,
+			"status":       "pending",
+		}
+		if description != "" {
+			item["description"] = description
+		}
+		if len(metadata) > 0 {
+			item["metadata"] = metadata
+		}
+		items = append(items, item)
+		seen[id] = struct{}{}
+		counts[itemType]++
+		if filePath, ok := metadata["file_path"].(string); ok && filePath != "" {
+			bucket := filepath.Dir(filePath)
+			bucket = strings.TrimSpace(filepath.ToSlash(bucket))
+			if bucket == "." {
+				bucket = ""
+			}
+			if !containsString(fileBuckets[bucket], filePath) {
+				fileBuckets[bucket] = append(fileBuckets[bucket], filePath)
+			}
+		}
+	}
+
+	for _, path := range taskInventoryFiles(task, pack) {
+		if isInventoryInterfaceFile(path) {
+			metadata := map[string]any{
+				"file_path": path,
+				"extension": strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
+			}
+			if activeFile != "" && normalizeInventoryPath(path) == activeFile {
+				metadata["role"] = "active_file"
+			}
+			addItem("interface", "interface:"+path, path, inventoryDescriptionForFile(path, "interface"), metadata)
+		}
+		itemType := inventoryFileType(path)
+		if itemType == "" {
+			continue
+		}
+		metadata := map[string]any{
+			"file_path": path,
+			"extension": strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
+		}
+		if activeFile != "" && normalizeInventoryPath(path) == activeFile {
+			metadata["role"] = "active_file"
+		}
+		addItem(itemType, itemType+":"+path, path, inventoryDescriptionForFile(path, itemType), metadata)
+	}
+
+	for _, symbol := range uniqueStrings(append(append([]string{}, pack.Symbols...), pack.ASTLeafNodes...)) {
+		symbolName := strings.TrimSpace(symbol)
+		if symbolName == "" {
+			continue
+		}
+		metadata := map[string]any{"symbol": symbolName}
+		if activeFile != "" {
+			metadata["file_path"] = activeFile
+		}
+		if strings.TrimSpace(pack.StructuralPath) != "" {
+			metadata["structural_path"] = pack.StructuralPath
+		}
+		addItem("symbol", "symbol:"+normalizeInventoryPath(pack.ActiveFile)+":"+symbolName, symbolName, "Code symbol discovered in repository context", metadata)
+	}
+
+	if relationshipItem := buildArtifactRelationshipItem(task, pack); relationshipItem != nil {
+		addItem("relationship", inventoryItemID(relationshipItem), inventoryItemDisplayName(relationshipItem), "Repository relationship grouping for the active artifact", relationshipItem["metadata"].(map[string]any))
+	}
+
+	if executionSurface := buildArtifactExecutionSurface(task, pack); executionSurface != nil {
+		addItem("execution_surface", inventoryItemID(executionSurface), inventoryItemDisplayName(executionSurface), "Execution surface for the active artifact and its validation path", executionSurface["metadata"].(map[string]any))
+	}
+
+	for bucket, files := range fileBuckets {
+		if len(files) >= 2 {
+			packageName := bucket
+			if packageName == "" {
+				packageName = "."
+			}
+			metadata := map[string]any{
+				"files":         append([]string(nil), files...),
+				"file_count":    len(files),
+				"package_name":  packageName,
+				"package_scope": packageName,
+			}
+			addItem("package", "package:"+packageName, packageName, "Package-scoped work area for related repository files", metadata)
+		}
+	}
+
+	for bucket, files := range fileBuckets {
+		if len(files) < 2 {
+			continue
+		}
+		sortedFiles := append([]string(nil), files...)
+		sort.Strings(sortedFiles)
+		displayName := bucket
+		if displayName == "" {
+			displayName = "."
+		}
+		metadata := map[string]any{
+			"files":       sortedFiles,
+			"file_count":  len(sortedFiles),
+			"bucket_path": bucket,
+		}
+		addItem("cluster", "cluster:"+displayName, displayName, "Dependency cluster for related files", metadata)
+	}
+
+	activeID := ""
+	if activeFile != "" {
+		for _, item := range items {
+			if itemPath := inventoryItemFilePath(item); itemPath != "" && normalizeInventoryPath(itemPath) == activeFile {
+				activeID = inventoryItemID(item)
+				break
+			}
+		}
+	}
+	if activeID == "" && len(items) > 0 {
+		activeID = inventoryItemID(items[0])
+	}
+	setActiveInventoryItem(items, activeID)
+
+	return map[string]any{
+		"inventory_type":    "code_artifacts",
+		"objective":         objective,
+		"objective_profile": objectiveProfile,
+		"active_item_id":    activeID,
+		"captured_at":       time.Now().UnixMilli(),
+		"items":             items,
+		"summary": map[string]any{
+			"total_items": len(items),
+			"counts":      counts,
+		},
+	}
+}
+
+func inferObjectiveProfile(objective string) string {
+	lower := strings.ToLower(strings.TrimSpace(objective))
+	switch {
+	case lower == "":
+		return "analysis"
+	case strings.Contains(lower, "fix failing tests"), strings.Contains(lower, "failing tests"), strings.Contains(lower, "test failure"), strings.Contains(lower, "repair"), strings.Contains(lower, "regression"), strings.Contains(lower, "bug"), strings.Contains(lower, "error"):
+		return "repair"
+	case strings.Contains(lower, "design"), strings.Contains(lower, "architect"), strings.Contains(lower, "plan"), strings.Contains(lower, "proposal"):
+		return "design"
+	case strings.Contains(lower, "refactor"), strings.Contains(lower, "cleanup"), strings.Contains(lower, "simplify"):
+		return "refactor"
+	case strings.Contains(lower, "analyze"), strings.Contains(lower, "inspect"), strings.Contains(lower, "understand"), strings.Contains(lower, "map the repo"), strings.Contains(lower, "repository overview"):
+		return "analysis"
+	default:
+		return "implementation"
+	}
+}
+
+func buildArtifactRelationshipItem(task cw.Task, pack cw.ContextPack) map[string]any {
+	activeFile := normalizeInventoryPath(task.ActiveFile)
+	if activeFile == "" {
+		activeFile = normalizeInventoryPath(pack.ActiveFile)
+	}
+	if activeFile == "" {
+		return nil
+	}
+
+	related := uniqueStrings(append([]string{}, pack.RelatedFiles...))
+	related = append(related, uniqueStrings(pack.DependencyFiles)...)
+	related = append(related, uniqueStrings(pack.TestFiles)...)
+	related = append(related, activeFile)
+	related = uniqueStrings(related)
+	sort.Strings(related)
+	if len(related) < 2 {
+		return nil
+	}
+
+	displayName := strings.TrimSuffix(filepath.Base(activeFile), filepath.Ext(activeFile))
+	if displayName == "" {
+		displayName = "artifact"
+	}
+	baseScope := filepath.Dir(activeFile)
+	if baseScope == "." || baseScope == "" {
+		baseScope = "root"
+	}
+	metadata := map[string]any{
+		"file_path":      activeFile,
+		"related_files":  related,
+		"scope":          filepath.ToSlash(baseScope),
+		"relation_count": len(related),
+	}
+	return map[string]any{
+		"id":           "relationship:" + activeFile,
+		"type":         "relationship",
+		"display_name": displayName,
+		"status":       "pending",
+		"metadata":     metadata,
+	}
+}
+
+func buildArtifactExecutionSurface(task cw.Task, pack cw.ContextPack) map[string]any {
+	activeFile := normalizeInventoryPath(task.ActiveFile)
+	if activeFile == "" {
+		activeFile = normalizeInventoryPath(pack.ActiveFile)
+	}
+	if activeFile == "" {
+		return nil
+	}
+
+	deps := append([]string(nil), uniqueStrings(pack.DependencyFiles)...)
+	tests := append([]string(nil), uniqueStrings(pack.TestFiles)...)
+	if len(deps) == 0 && len(tests) == 0 {
+		return nil
+	}
+
+	displayName := strings.TrimSuffix(filepath.Base(activeFile), filepath.Ext(activeFile))
+	if displayName == "" {
+		displayName = "execution surface"
+	}
+	metadata := map[string]any{
+		"file_path":        activeFile,
+		"dependency_files": deps,
+		"test_files":       tests,
+		"related_files":    uniqueStrings(append(append([]string{}, deps...), tests...)),
+		"execution_scope":  filepath.ToSlash(filepath.Dir(activeFile)),
+		"dependency_count": len(deps),
+		"test_count":       len(tests),
+	}
+	return map[string]any{
+		"id":           "execution_surface:" + activeFile,
+		"type":         "execution_surface",
+		"display_name": displayName,
+		"status":       "pending",
+		"metadata":     metadata,
+	}
+}
+
+func (p *CodingPhase) formatArtifactInventoryResponse(snapshot map[string]any) string {
+	if len(snapshot) == 0 {
+		return "Artifact Inventory: none"
+	}
+	encoded, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Artifact Inventory: %v", snapshot)
+	}
+	return fmt.Sprintf("Artifact Inventory:\n%s", string(encoded))
+}
+
+func (p *CodingPhase) loadArtifactInventorySnapshot() (string, map[string]any, error) {
+	infra := p.ensureSharedInfrastructure()
+	if infra == nil || infra.STMAccessor == nil {
+		return "", nil, fmt.Errorf("stream context not available")
+	}
+	stm := infra.STMAccessor()
+	if stm == nil {
+		return "", nil, fmt.Errorf("stream context not available")
+	}
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return "", nil, fmt.Errorf("no active workstream")
+	}
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return "", nil, fmt.Errorf("no stream context")
+	}
+	phaseArtifacts := streamCtx.GetPhaseArtifacts()
+	if len(phaseArtifacts) == 0 {
+		return "", nil, nil
+	}
+	if snapshot, ok := extractArtifactInventorySnapshot(phaseArtifacts[p.phaseID]); ok {
+		return p.phaseID, snapshot, nil
+	}
+	for phaseKey, artifact := range phaseArtifacts {
+		if phaseKey == p.phaseID {
+			continue
+		}
+		if snapshot, ok := extractArtifactInventorySnapshot(artifact); ok {
+			return phaseKey, snapshot, nil
+		}
+	}
+	return "", nil, nil
+}
+
+func (p *CodingPhase) persistArtifactInventorySnapshot(snapshot map[string]any) error {
+	return p.persistArtifactInventorySnapshotForPhase(p.phaseID, snapshot)
+}
+
+func (p *CodingPhase) persistArtifactInventorySnapshotForPhase(phaseKey string, snapshot map[string]any) error {
+	if len(snapshot) == 0 {
+		return nil
+	}
+	infra := p.ensureSharedInfrastructure()
+	if infra == nil || infra.STMAccessor == nil {
+		return fmt.Errorf("stream context not available")
+	}
+	stm := infra.STMAccessor()
+	if stm == nil {
+		return fmt.Errorf("stream context not available")
+	}
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return fmt.Errorf("no active workstream")
+	}
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return fmt.Errorf("no stream context")
+	}
+	phaseArtifacts := streamCtx.GetPhaseArtifacts()
+	if phaseArtifacts == nil {
+		return fmt.Errorf("phase artifacts are not initialized")
+	}
+	if phaseKey == "" {
+		phaseKey = p.phaseID
+	}
+	artifact, ok := phaseArtifacts[phaseKey]
+	if !ok || artifact == nil {
+		artifact = map[string]any{}
+		phaseArtifacts[phaseKey] = artifact
+	}
+	artifact["artifact_inventory"] = snapshot
+	return nil
+}
+
+func extractArtifactInventorySnapshot(artifact map[string]any) (map[string]any, bool) {
+	if len(artifact) == 0 {
+		return nil, false
+	}
+	for _, key := range []string{"artifact_inventory", "work_inventory"} {
+		if raw, ok := artifact[key]; ok {
+			if snapshot, ok := raw.(map[string]any); ok {
+				return snapshot, true
+			}
+			if converted := convertToStringAnyMap(raw); len(converted) > 0 {
+				return converted, true
+			}
+		}
+	}
+	if _, ok := artifact["items"]; ok {
+		return artifact, true
+	}
+	return nil, false
+}
+
+func convertToStringAnyMap(value any) map[string]any {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(bytes, &snapshot); err != nil {
+		return nil
+	}
+	return snapshot
+}
+
+func taskInventoryFiles(task cw.Task, pack cw.ContextPack) []string {
+	files := []string{}
+	for _, candidate := range []string{task.ActiveFile} {
+		if candidate = strings.TrimSpace(candidate); candidate != "" {
+			files = append(files, candidate)
+		}
+	}
+	for _, candidate := range pack.RelatedFiles {
+		files = append(files, candidate)
+	}
+	for _, candidate := range pack.DependencyFiles {
+		files = append(files, candidate)
+	}
+	for _, candidate := range pack.TestFiles {
+		files = append(files, candidate)
+	}
+	for _, candidate := range pack.RepositoryFiles {
+		files = append(files, candidate)
+	}
+	return uniqueStrings(files)
+}
+
+func inventoryFileType(filePath string) string {
+	path := strings.ToLower(strings.TrimSpace(filePath))
+	if path == "" {
+		return ""
+	}
+	base := filepath.Base(path)
+	if isInventoryTestFile(base) {
+		return "test"
+	}
+	if isInventoryConfigFile(base) {
+		return "config"
+	}
+	if isInventorySourceFile(base) {
+		return "file"
+	}
+	return ""
+}
+
+func isInventorySourceFile(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".rs", ".cs", ".sh":
+		return true
+	default:
+		return false
+	}
+}
+
+func isInventoryConfigFile(filePath string) bool {
+	base := strings.ToLower(filepath.Base(filePath))
+	switch {
+	case base == "go.mod", base == "go.sum", base == "package.json", base == "package-lock.json", base == "pnpm-lock.yaml", base == "yarn.lock", base == "Cargo.toml", base == "Cargo.lock", base == "pom.xml", base == "build.gradle", base == "build.gradle.kts", base == "pyproject.toml", base == "requirements.txt":
+		return true
+	case strings.HasSuffix(base, ".yaml"), strings.HasSuffix(base, ".yml"), strings.HasSuffix(base, ".json"), strings.HasSuffix(base, ".toml"), strings.HasSuffix(base, ".xml"), strings.HasSuffix(base, ".ini"), strings.HasSuffix(base, ".env"), strings.HasSuffix(base, ".properties"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isInventoryTestFile(filePath string) bool {
+	base := strings.ToLower(filepath.Base(filePath))
+	return strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, ".test.js") || strings.HasSuffix(base, ".test.ts") || strings.HasSuffix(base, ".spec.js") || strings.HasSuffix(base, ".spec.ts") || strings.HasSuffix(base, ".spec.tsx") || strings.HasSuffix(base, ".test.py")
+}
+
+func inventoryDescriptionForFile(filePath, itemType string) string {
+	switch itemType {
+	case "test":
+		return "Test artifact relevant to the current codebase inventory"
+	case "config":
+		return "Configuration artifact relevant to the current codebase inventory"
+	case "interface":
+		return "Interface artifact relevant to the current codebase inventory"
+	default:
+		return "Source artifact relevant to the current codebase inventory"
+	}
+}
+
+func isInventoryInterfaceFile(filePath string) bool {
+	base := strings.ToLower(filepath.Base(filePath))
+	if strings.Contains(base, "interface") || strings.Contains(base, "contract") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(filepath.ToSlash(filePath)), "/interfaces/") {
+		return true
+	}
+	return false
+}
+
+func inventoryItemID(item map[string]any) string {
+	if item == nil {
+		return ""
+	}
+	if id, ok := item["id"].(string); ok {
+		return strings.TrimSpace(id)
+	}
+	return ""
+}
+
+func inventoryItemFilePath(item map[string]any) string {
+	if item == nil {
+		return ""
+	}
+	if metadata, ok := item["metadata"].(map[string]any); ok {
+		if path, ok := metadata["file_path"].(string); ok {
+			return strings.TrimSpace(path)
+		}
+	}
+	return ""
+}
+
+func inventoryItemDisplayName(item map[string]any) string {
+	if item == nil {
+		return ""
+	}
+	if displayName, ok := item["display_name"].(string); ok {
+		return strings.TrimSpace(displayName)
+	}
+	return ""
+}
+
+func selectArtifactInventoryItem(snapshot map[string]any, itemID string) bool {
+	items := snapshotItems(snapshot)
+	if len(items) == 0 {
+		return false
+	}
+	selectedIndex := -1
+	for idx, item := range items {
+		if matchesInventorySelection(item, itemID) {
+			selectedIndex = idx
+			break
+		}
+	}
+	if selectedIndex < 0 {
+		return false
+	}
+	selectedID := inventoryItemID(items[selectedIndex])
+	setActiveInventoryItem(items, selectedID)
+	snapshot["active_item_id"] = selectedID
+	snapshot["items"] = items
+	return true
+}
+
+func completeArtifactInventoryItem(snapshot map[string]any, itemID string) bool {
+	items := snapshotItems(snapshot)
+	if len(items) == 0 {
+		return false
+	}
+	selectedIndex := -1
+	for idx, item := range items {
+		if matchesInventorySelection(item, itemID) {
+			selectedIndex = idx
+			break
+		}
+	}
+	if selectedIndex < 0 {
+		return false
+	}
+	selectedID := inventoryItemID(items[selectedIndex])
+	items[selectedIndex]["status"] = "completed"
+	items[selectedIndex]["completed_at"] = time.Now().UnixMilli()
+	if activeID, _ := snapshot["active_item_id"].(string); activeID == selectedID {
+		snapshot["active_item_id"] = ""
+	}
+	for idx, item := range items {
+		if idx == selectedIndex {
+			continue
+		}
+		if status, _ := item["status"].(string); status == "active" {
+			item["status"] = "pending"
+		}
+	}
+	advanceArtifactInventoryActiveItem(snapshot, items)
+	snapshot["items"] = items
+	return true
+}
+
+func advanceArtifactInventoryActiveItem(snapshot map[string]any, items []map[string]any) {
+	for _, item := range items {
+		if status, _ := item["status"].(string); status == "pending" {
+			item["status"] = "active"
+			item["started_at"] = time.Now().UnixMilli()
+			snapshot["active_item_id"] = inventoryItemID(item)
+			return
+		}
+	}
+	snapshot["active_item_id"] = ""
+}
+
+func snapshotItems(snapshot map[string]any) []map[string]any {
+	if len(snapshot) == 0 {
+		return nil
+	}
+	rawItems, ok := snapshot["items"]
+	if !ok {
+		return nil
+	}
+	var items []map[string]any
+	switch v := rawItems.(type) {
+	case []map[string]any:
+		items = make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if item == nil {
+				continue
+			}
+			items = append(items, item)
+		}
+	case []any:
+		items = make([]map[string]any, 0, len(v))
+		for _, raw := range v {
+			if item, ok := raw.(map[string]any); ok {
+				items = append(items, item)
+			}
+		}
+	default:
+		converted := convertToStringAnyMap(v)
+		if len(converted) > 0 {
+			if nested, ok := converted["items"].([]any); ok {
+				items = make([]map[string]any, 0, len(nested))
+				for _, raw := range nested {
+					if item, ok := raw.(map[string]any); ok {
+						items = append(items, item)
+					}
+				}
+			}
+		}
+	}
+	return items
+}
+
+func matchesInventorySelection(item map[string]any, selector string) bool {
+	selector = strings.TrimSpace(strings.ToLower(selector))
+	if selector == "" {
+		return false
+	}
+	if strings.ToLower(inventoryItemID(item)) == selector {
+		return true
+	}
+	if strings.ToLower(inventoryItemDisplayName(item)) == selector {
+		return true
+	}
+	if path := strings.ToLower(inventoryItemFilePath(item)); path != "" && path == selector {
+		return true
+	}
+	return false
+}
+
+func setActiveInventoryItem(items []map[string]any, activeID string) {
+	for _, item := range items {
+		itemID := inventoryItemID(item)
+		if itemID == "" {
+			continue
+		}
+		if itemID == activeID {
+			if status, _ := item["status"].(string); status != "completed" {
+				item["status"] = "active"
+				item["started_at"] = time.Now().UnixMilli()
+			}
+			continue
+		}
+		if status, _ := item["status"].(string); status == "active" {
+			item["status"] = "pending"
+		}
+	}
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeInventoryPath(path string) string {
+	return strings.TrimSpace(filepath.ToSlash(path))
 }
 
 func readPatch(args map[string]any) *Patch {

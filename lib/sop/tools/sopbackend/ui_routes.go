@@ -827,16 +827,9 @@ func sharedTemplateDir() string {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if ok {
 		baseDir := filepath.Dir(currentFile)
-		candidates := []string{
-			filepath.Join(baseDir, "templates"),
-			filepath.Join(baseDir, "..", "httpserver", "templates"),
-			filepath.Join(baseDir, "..", "..", "httpserver", "templates"),
-			filepath.Join(baseDir, "..", "..", "..", "httpserver", "templates"),
-		}
-		for _, candidate := range candidates {
-			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-				return candidate
-			}
+		candidate := filepath.Join(baseDir, "templates")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
 		}
 	}
 	return filepath.Join("templates")

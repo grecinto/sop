@@ -947,7 +947,7 @@ func resolveActiveCodingRuntimePhase(classification *AskTaskContext, phase strin
 	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		return resolved
 	}
-	if strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) == orchestrationManagedWorkflow {
+	if isManagedOrchestrationLevel(classification.OrchestrationLevel) {
 		if resolved == "planning" {
 			return "planning"
 		}

@@ -45,6 +45,16 @@ func TestPlannerCapabilityBuildContext_UsesDiscoveryImplementationLanguage(t *te
 	}
 }
 
+func TestCodingPhaseExecutionBuildContext_PromotesSameTurnPivotToPreviewPatch(t *testing.T) {
+	phase := newCodingPhase("execution", nil)
+	contextText := phase.BuildContext("fix failing tests", capabilities.RoutingState{CapabilityHint: "execution"})
+	for _, check := range []string{"SAME-TURN PIVOT RULE", "preview_patch immediately", "Do not wait for a separate phase handoff or queue item"} {
+		if !strings.Contains(contextText, check) {
+			t.Fatalf("expected execution context to include %q, got %q", check, contextText)
+		}
+	}
+}
+
 func TestPlannerCapabilityBuildInstructions_AvoidsMandatoryPhasePlanForCoding(t *testing.T) {
 	cap := NewPlannerCapability(nil)
 	instructions := cap.BuildInstructions("fix failing tests", capabilities.RoutingState{CapabilityHint: "planner"})
@@ -52,6 +62,22 @@ func TestPlannerCapabilityBuildInstructions_AvoidsMandatoryPhasePlanForCoding(t 
 		if !strings.Contains(instructions, check) {
 			t.Fatalf("expected planner instructions to include %q, got %q", check, instructions)
 		}
+	}
+}
+
+func TestShouldPreferSemanticRouting_RepoCentricRepairQueries(t *testing.T) {
+	for _, query := range []string{
+		"fix failing tests in the parser package",
+		"this repo is broken after the refactor",
+		"repair the project regression",
+		"debug the failing codebase",
+	} {
+		if !shouldPreferSemanticRouting(query, capabilities.RoutingState{}) {
+			t.Fatalf("expected repo-centric repair query to prefer semantic routing: %q", query)
+		}
+	}
+	if shouldPreferSemanticRouting("hello there", capabilities.RoutingState{}) {
+		t.Fatal("expected benign greeting to avoid semantic-first routing")
 	}
 }
 
@@ -207,6 +233,382 @@ func TestCodingPhaseRunPlanChanges_UsesStoredPhaseContinuationSummary(t *testing
 	}
 	if !planner.observedPack.ResumedFromState {
 		t.Fatalf("expected planner context pack to mark resumed state, got %#v", planner.observedPack)
+	}
+}
+
+func TestDiagnosisInstrumentation_TracksRepairTasksWithoutDiagnosis(t *testing.T) {
+	summary := "Fix failing parser regression caused by invalid token handling"
+	plan := []string{"Investigate the failing parser test", "Patch the parser state machine"}
+	evidence := []string{"TestParserRejectsInvalidInput failed with unexpected token"}
+
+	if !isRepairTaskForDiagnosis(summary, plan, evidence) {
+		t.Fatal("expected repair classification to trigger for failing-code tasks")
+	}
+
+	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"})
+	if len(missing) == 0 || !containsString(missing, "root_cause") || !containsString(missing, "evidence") {
+		t.Fatalf("expected missing diagnosis fields to include root_cause and evidence, got %#v", missing)
+	}
+}
+
+func TestPhaseBPreviewPatchWarnsWhenDiagnosisMissing(t *testing.T) {
+	missing := diagnosisFieldsMissing(map[string]any{"fix_target": "code"})
+	if len(missing) == 0 || !containsString(missing, "root_cause") || !containsString(missing, "evidence") {
+		t.Fatalf("expected missing diagnosis fields to be reported by the soft-gate helper, got %#v", missing)
+	}
+	if !isRepairTaskForDiagnosis("fix the failing parser regression", nil, []string{"parser test failed"}) {
+		t.Fatal("expected repair detection for failing task")
+	}
+}
+
+func TestPhaseCPreviewPatchRequiresDiagnosisForRepairTasks(t *testing.T) {
+	phase := newCodingPhase("execution", nil)
+	_, err := phase.runPreviewPatch(context.Background(), map[string]any{
+		"query":      "fix the failing parser regression",
+		"working_dir": ".",
+		"file_path":  "pkg/parser.go",
+		"old_content": "func Parse() {}",
+		"new_content": "func Parse() { return nil }",
+	})
+	if err == nil {
+		t.Fatal("expected hard gate error when repair task lacks diagnosis metadata")
+	}
+	if !strings.Contains(err.Error(), "DIAGNOSIS REQUIRED") || !strings.Contains(err.Error(), "root_cause") {
+		t.Fatalf("expected diagnosis requirement in error, got %v", err)
+	}
+}
+
+func TestPhaseDRequiresSharedCauseAndBlastRadiusInDiagnosis(t *testing.T) {
+	phase := newCodingPhase("execution", nil)
+	_, err := phase.runPreviewPatch(context.Background(), map[string]any{
+		"query":      "fix the failing parser regression",
+		"working_dir": ".",
+		"file_path":  "pkg/parser.go",
+		"old_content": "func Parse() {}",
+		"new_content": "func Parse() { return nil }",
+		"structured_data": map[string]any{
+			"diagnosis": map[string]any{
+				"root_cause": "invalid token handling in parser",
+				"evidence":   []string{"TestParserRejectsInvalidInput failed"},
+				"fix_target": "code",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected Phase D check to require shared_with and blast_radius in diagnosis")
+	}
+	if !strings.Contains(err.Error(), "shared_with") || !strings.Contains(err.Error(), "blast_radius") {
+		t.Fatalf("expected shared_with and blast_radius in hard gate error, got %v", err)
+	}
+}
+
+func TestClusterFailureEvidenceGroupsSharedFailures(t *testing.T) {
+	clusters := clusterFailureEvidence([]string{
+		"TestParserRejectsInvalidInput failed with unexpected token",
+		"TestParserRejectsNullInput failed with unexpected token",
+		"TestConfigLoadsDefaults passed",
+	})
+	if len(clusters) == 0 {
+		t.Fatal("expected at least one failure cluster")
+	}
+	if len(clusters[0]["members"].([]string)) < 2 {
+		t.Fatalf("expected shared failure cluster to include multiple members, got %#v", clusters[0])
+	}
+}
+
+func TestCodingPhaseBuildArtifactInventory_UsesContextSignals(t *testing.T) {
+	phase := newCodingPhase("investigation", nil)
+	pack := cw.ContextPack{
+		ActiveFile:        "pkg/parser.go",
+		RepositoryFiles:   []string{"pkg/parser.go", "pkg/parser_test.go", "pkg/config.yaml", "pkg/interfaces/parser_interface.go", "README.md"},
+		RelatedFiles:      []string{"pkg/parser.go"},
+		DependencyFiles:   []string{"pkg/parser_test.go"},
+		TestFiles:         []string{"pkg/parser_test.go"},
+		Symbols:           []string{"Parse"},
+		ASTLeafNodes:      []string{"Parse"},
+		StructuralPath:    "repo/pkg/Parse",
+		RepositorySummary: "module=demo",
+	}
+
+	snapshot := phase.buildArtifactInventory(cw.Task{ActiveFile: "pkg/parser.go", Description: "analyze parser"}, pack)
+	if snapshot == nil {
+		t.Fatal("expected inventory snapshot")
+	}
+	if got := snapshot["inventory_type"]; got != "code_artifacts" {
+		t.Fatalf("expected code_artifacts inventory, got %#v", got)
+	}
+	if got := snapshot["objective"]; got != "analyze parser" {
+		t.Fatalf("expected objective to be captured on inventory, got %#v", got)
+	}
+	if got := snapshot["objective_profile"]; got == "" {
+		t.Fatalf("expected objective profile to be set on inventory, got %#v", got)
+	}
+	items, ok := snapshot["items"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected items slice, got %#v", snapshot["items"])
+	}
+	if len(items) == 0 {
+		t.Fatal("expected inventory items")
+	}
+	if activeID, _ := snapshot["active_item_id"].(string); activeID == "" {
+		t.Fatal("expected active item id to be set")
+	}
+	var sawFile, sawTest, sawConfig, sawSymbol, sawCluster, sawInterface bool
+	for _, item := range items {
+		switch item["type"] {
+		case "interface":
+			if item["display_name"] == "pkg/interfaces/parser_interface.go" {
+				sawInterface = true
+			}
+		case "file":
+			if item["display_name"] == "pkg/parser.go" {
+				sawFile = true
+			}
+		case "test":
+			if item["display_name"] == "pkg/parser_test.go" {
+				sawTest = true
+			}
+		case "config":
+			if item["display_name"] == "pkg/config.yaml" {
+				sawConfig = true
+			}
+		case "symbol":
+			if item["display_name"] == "Parse" {
+				sawSymbol = true
+			}
+		case "cluster":
+			if item["display_name"] == "pkg" {
+				sawCluster = true
+			}
+		}
+	}
+	if !sawFile || !sawTest || !sawConfig || !sawSymbol || !sawCluster || !sawInterface {
+		t.Fatalf("expected file/test/config/symbol inventory items, got %#v", items)
+	}
+}
+
+func TestCodingPhaseBuildArtifactInventory_AddsRelationshipGroups(t *testing.T) {
+	phase := newCodingPhase("investigation", nil)
+	pack := cw.ContextPack{
+		ActiveFile:        "pkg/parser.go",
+		RepositoryFiles:   []string{"pkg/parser.go", "pkg/interfaces/parser_interface.go", "pkg/parser_test.go"},
+		RelatedFiles:      []string{"pkg/parser.go"},
+		DependencyFiles:   []string{"pkg/interfaces/parser_interface.go"},
+		TestFiles:         []string{"pkg/parser_test.go"},
+		Symbols:           []string{"Parse"},
+		ASTLeafNodes:      []string{"Parse"},
+		StructuralPath:    "repo/pkg/Parse",
+		RepositorySummary: "module=demo",
+	}
+
+	snapshot := phase.buildArtifactInventory(cw.Task{ActiveFile: "pkg/parser.go", Description: "analyze parser"}, pack)
+	items := snapshotItems(snapshot)
+	var sawRelationship bool
+	for _, item := range items {
+		if item["type"] == "relationship" && item["display_name"] == "parser" {
+			sawRelationship = true
+			if metadata, ok := item["metadata"].(map[string]any); ok {
+				files, ok := metadata["related_files"].([]string)
+				if !ok || len(files) < 2 {
+					t.Fatalf("expected relationship item to include multiple related files, got %#v", metadata)
+				}
+			}
+		}
+	}
+	if !sawRelationship {
+		t.Fatalf("expected relationship inventory item for parser, got %#v", items)
+	}
+}
+
+func TestCodingPhaseBuildArtifactInventory_PrioritizesPackageScope(t *testing.T) {
+	phase := newCodingPhase("investigation", nil)
+	pack := cw.ContextPack{
+		ActiveFile:        "pkg/parser.go",
+		RepositoryFiles:   []string{"pkg/parser.go", "pkg/parser_test.go", "pkg/parser_helper.go"},
+		RelatedFiles:      []string{"pkg/parser.go"},
+		DependencyFiles:   []string{"pkg/parser_helper.go"},
+		TestFiles:         []string{"pkg/parser_test.go"},
+		Symbols:           []string{"Parse"},
+		ASTLeafNodes:      []string{"Parse"},
+		StructuralPath:    "repo/pkg/Parse",
+		RepositorySummary: "module=demo",
+	}
+
+	snapshot := phase.buildArtifactInventory(cw.Task{ActiveFile: "pkg/parser.go", Description: "analyze parser"}, pack)
+	items := snapshotItems(snapshot)
+	var sawPackageScope bool
+	for _, item := range items {
+		if item["type"] == "package" && item["display_name"] == "pkg" {
+			sawPackageScope = true
+			if metadata, ok := item["metadata"].(map[string]any); ok {
+				files, ok := metadata["files"].([]string)
+				if !ok || len(files) < 2 {
+					t.Fatalf("expected package scope item to include multiple files, got %#v", metadata)
+				}
+			}
+		}
+	}
+	if !sawPackageScope {
+		t.Fatalf("expected package-scoped inventory item for pkg, got %#v", items)
+	}
+}
+
+func TestCodingPhaseBuildArtifactInventory_TracksExecutionSurfaceEdges(t *testing.T) {
+	phase := newCodingPhase("investigation", nil)
+	pack := cw.ContextPack{
+		ActiveFile:        "pkg/parser.go",
+		RepositoryFiles:   []string{"pkg/parser.go", "pkg/parser_helper.go", "pkg/parser_test.go", "pkg/config.yaml"},
+		RelatedFiles:      []string{"pkg/parser.go"},
+		DependencyFiles:   []string{"pkg/parser_helper.go"},
+		TestFiles:         []string{"pkg/parser_test.go"},
+		Symbols:           []string{"Parse"},
+		ASTLeafNodes:      []string{"Parse"},
+		StructuralPath:    "repo/pkg/Parse",
+		RepositorySummary: "module=demo",
+	}
+
+	snapshot := phase.buildArtifactInventory(cw.Task{ActiveFile: "pkg/parser.go", Description: "analyze parser"}, pack)
+	items := snapshotItems(snapshot)
+	var sawExecutionSurface bool
+	for _, item := range items {
+		if item["type"] == "execution_surface" {
+			sawExecutionSurface = true
+			metadata, ok := item["metadata"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected execution surface metadata, got %#v", item)
+			}
+			deps, _ := metadata["dependency_files"].([]string)
+			tests, _ := metadata["test_files"].([]string)
+			if len(deps) == 0 || len(tests) == 0 {
+				t.Fatalf("expected dependency and test files on execution surface, got %#v", metadata)
+			}
+		}
+	}
+	if !sawExecutionSurface {
+		t.Fatalf("expected execution surface inventory item, got %#v", items)
+	}
+}
+
+func TestResolveTaskActiveFileFromInventory_UsesSelectedArtifactWhenExplicitFileMissing(t *testing.T) {
+	snapshot := map[string]any{
+		"active_item_id": "test:pkg/parser_test.go",
+		"items": []map[string]any{
+			{"id": "file:pkg/parser.go", "type": "file", "display_name": "pkg/parser.go", "status": "pending", "metadata": map[string]any{"file_path": "pkg/parser.go"}},
+			{"id": "test:pkg/parser_test.go", "type": "test", "display_name": "pkg/parser_test.go", "status": "active", "metadata": map[string]any{"file_path": "pkg/parser_test.go"}},
+		},
+	}
+
+	got := resolveTaskActiveFileFromInventory(cw.Task{Description: "fix parser bug"}, snapshot)
+	if got != "pkg/parser_test.go" {
+		t.Fatalf("expected active inventory file to be used as target, got %q", got)
+	}
+
+	got = resolveTaskActiveFileFromInventory(cw.Task{ActiveFile: "pkg/other.go", Description: "fix parser bug"}, snapshot)
+	if got != "pkg/other.go" {
+		t.Fatalf("expected explicit task file to win over inventory, got %q", got)
+	}
+}
+
+func TestCodingPhaseBuildTask_UsesActiveInventoryFileWhenNoActiveFileProvided(t *testing.T) {
+	phaseArtifacts := map[string]map[string]any{
+		"investigation": {
+			"artifact_inventory": map[string]any{
+				"active_item_id": "file:pkg/parser.go",
+				"items": []map[string]any{
+					{"id": "file:pkg/parser.go", "type": "file", "display_name": "pkg/parser.go", "status": "active", "metadata": map[string]any{"file_path": "pkg/parser.go"}},
+					{"id": "test:pkg/parser_test.go", "type": "test", "display_name": "pkg/parser_test.go", "status": "pending", "metadata": map[string]any{"file_path": "pkg/parser_test.go"}},
+				},
+			},
+		},
+	}
+	phase := newCodingPhase("investigation", &cw.SharedInfrastructure{STMAccessor: func() cw.STMReader {
+		return &phaseSTMReader{thread: &phaseWorkStreamReader{ctx: &phaseWorkStreamContext{phaseArtifacts: phaseArtifacts}}}
+	}})
+
+	task := phase.buildTask(context.Background(), map[string]any{"query": "fix parser bug"})
+	if task.ActiveFile != "pkg/parser.go" {
+		t.Fatalf("expected buildTask to default to active inventory file, got %q", task.ActiveFile)
+	}
+}
+
+type phaseSTMReader struct {
+	thread cw.WorkStreamReader
+}
+
+func (r *phaseSTMReader) GetCurrentThread() cw.WorkStreamReader { return r.thread }
+func (r *phaseSTMReader) CreatePhasePlan(phases []string, checkpoints map[string]bool, reasoning, confidence string) error {
+	return nil
+}
+func (r *phaseSTMReader) StoreMultiStepPlan(planData any) error { return nil }
+
+type phaseWorkStreamReader struct {
+	ctx cw.WorkStreamContextReader
+}
+
+func (r *phaseWorkStreamReader) GetStreamContext() cw.WorkStreamContextReader { return r.ctx }
+
+type phaseWorkStreamContext struct {
+	phaseArtifacts map[string]map[string]any
+}
+
+func (c *phaseWorkStreamContext) GetPhasePlan() cw.PhasePlanReader           { return nil }
+func (c *phaseWorkStreamContext) SetPhasePlan(cw.PhasePlanReader)            {}
+func (c *phaseWorkStreamContext) GetStructuredPlan() cw.StructuredPlanReader { return nil }
+func (c *phaseWorkStreamContext) SetStructuredPlan(cw.StructuredPlanReader)  {}
+func (c *phaseWorkStreamContext) GetMultiStepPlan() cw.MultiStepPlanReader   { return nil }
+func (c *phaseWorkStreamContext) SetMultiStepPlan(cw.MultiStepPlanReader)    {}
+func (c *phaseWorkStreamContext) GetPhaseArtifacts() map[string]map[string]any {
+	return c.phaseArtifacts
+}
+
+func TestArtifactInventorySelectionAndCompletion_AdvancesActiveItem(t *testing.T) {
+	snapshot := map[string]any{
+		"inventory_type": "code_artifacts",
+		"active_item_id": "file:pkg/parser.go",
+		"items": []map[string]any{
+			{"id": "file:pkg/parser.go", "type": "file", "display_name": "pkg/parser.go", "status": "active", "metadata": map[string]any{"file_path": "pkg/parser.go"}},
+			{"id": "test:pkg/parser_test.go", "type": "test", "display_name": "pkg/parser_test.go", "status": "pending", "metadata": map[string]any{"file_path": "pkg/parser_test.go"}},
+			{"id": "config:pkg/config.yaml", "type": "config", "display_name": "pkg/config.yaml", "status": "pending", "metadata": map[string]any{"file_path": "pkg/config.yaml"}},
+		},
+	}
+
+	if !selectArtifactInventoryItem(snapshot, "pkg/parser_test.go") {
+		t.Fatal("expected selectArtifactInventoryItem to match by display name")
+	}
+	items := snapshotItems(snapshot)
+	if got := snapshot["active_item_id"]; got != "test:pkg/parser_test.go" {
+		t.Fatalf("expected active item id to move to test item, got %#v", got)
+	}
+	for _, item := range items {
+		if item["id"] == "test:pkg/parser_test.go" && item["status"] != "active" {
+			t.Fatalf("expected selected item to be active, got %#v", item)
+		}
+	}
+
+	if !completeArtifactInventoryItem(snapshot, "test:pkg/parser_test.go") {
+		t.Fatal("expected completeArtifactInventoryItem to mark the item complete")
+	}
+	if got := snapshot["active_item_id"]; got != "file:pkg/parser.go" {
+		t.Fatalf("expected next pending item to become active, got %#v", got)
+	}
+	items = snapshotItems(snapshot)
+	var sawCompleted, sawNextActive bool
+	for _, item := range items {
+		switch item["id"] {
+		case "test:pkg/parser_test.go":
+			if item["status"] != "completed" {
+				t.Fatalf("expected completed item status, got %#v", item)
+			}
+			sawCompleted = true
+		case "file:pkg/parser.go":
+			if item["status"] != "active" {
+				t.Fatalf("expected next item to be active, got %#v", item)
+			}
+			sawNextActive = true
+		}
+	}
+	if !sawCompleted || !sawNextActive {
+		t.Fatalf("expected completion to advance to next item, got %#v", items)
 	}
 }
 

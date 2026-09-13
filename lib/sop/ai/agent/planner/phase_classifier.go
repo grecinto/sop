@@ -314,10 +314,58 @@ func (s *AdaptiveClassificationStrategy) CanEscalate() bool {
 	return false // Already handles escalation internally
 }
 
+func shouldPreferSemanticRouting(query string, state capabilities.RoutingState) bool {
+	if strings.TrimSpace(query) == "" {
+		return false
+	}
+	if strings.TrimSpace(state.CapabilityHint) != "" {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(query))
+
+	repoSignals := []string{"repo", "repository", "codebase", "project", "package", "module", "workspace", "file", "parser", "api", "service", "lib", "source"}
+	actionSignals := []string{"fix", "repair", "debug", "broken", "broke", "failing", "fail", "regression", "trace", "diagnose", "investigate"}
+	ambiguousSignals := []string{"this", "it", "issue", "problem", "error", "errors", "broken", "broke"}
+
+	if containsAnySignal(lower, repoSignals) && containsAnySignal(lower, actionSignals) {
+		return true
+	}
+	if containsAnySignal(lower, ambiguousSignals) && containsAnySignal(lower, actionSignals) {
+		return true
+	}
+	if strings.Contains(lower, "fix failing tests") || strings.Contains(lower, "failing tests") || strings.Contains(lower, "tests are failing") {
+		return true
+	}
+	return false
+}
+
+func containsAnySignal(lower string, signals []string) bool {
+	for _, signal := range signals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *AdaptiveClassificationStrategy) Classify(ctx context.Context, phase *BasePhase, query string, state capabilities.RoutingState, history *ClassificationHistory) capabilities.ClassificationResult {
 	// Use provided history or fall back to instance history
 	if history == nil {
 		history = s.history
+	}
+
+	// Prefer semantic intent for ambiguous or repo-centric repair queries.
+	// Heuristics remain the cheap front door, but semantic routing decides for the
+	// cases where the user is describing a task by intent rather than literal string match.
+	if shouldPreferSemanticRouting(query, state) && s.llm != nil && s.llm.generator != nil {
+		result := s.llm.Classify(ctx, phase, query, state, history)
+		if result.Relevant {
+			if result.Metadata == nil {
+				result.Metadata = make(map[string]any)
+			}
+			result.Metadata["semantic_first"] = true
+			return result
+		}
 	}
 
 	// Check if we should skip heuristics and go straight to LLM
@@ -330,7 +378,7 @@ func (s *AdaptiveClassificationStrategy) Classify(ctx context.Context, phase *Ba
 		return result
 	}
 
-	// Try heuristic first
+	// Try heuristic first, but only as a cheap front door.
 	result := s.heuristic.Classify(ctx, phase, query, state, history)
 
 	// If heuristic found nothing or low confidence, try LLM
