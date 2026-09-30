@@ -29,6 +29,7 @@ func (b clineHTTPBackendStub) StartTask(ctx context.Context, req ideworker.TaskR
 type recordingClineHTTPBackend struct {
 	result  string
 	request ideworker.TaskRequest
+	status  ideworker.DelegationStatus
 }
 
 func (b *recordingClineHTTPBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
@@ -39,13 +40,15 @@ func (b *recordingClineHTTPBackend) ExecuteTask(ctx context.Context, req idework
 	return b.result, nil
 }
 func (b *recordingClineHTTPBackend) StartTask(ctx context.Context, req ideworker.TaskRequest) (ideworker.DelegationHandle, error) {
-	return ideworker.DelegationHandle{}, nil
+	b.request = req
+	return ideworker.DelegationHandle{ID: "task-1", Status: "running"}, nil
 }
 func (b *recordingClineHTTPBackend) GetTaskStatus(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
-	return ideworker.DelegationStatus{}, nil
+	return b.status, nil
 }
 func (b *recordingClineHTTPBackend) CancelTask(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
-	return ideworker.DelegationStatus{}, nil
+	b.status = ideworker.DelegationStatus{ID: delegationID, Status: "cancelled", Cancelled: true}
+	return b.status, nil
 }
 func (b clineHTTPBackendStub) GetTaskStatus(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
 	return ideworker.DelegationStatus{}, nil
@@ -86,5 +89,28 @@ func TestClineHTTPExecuteRejectsUnknownFields(t *testing.T) {
 	service.handleClineExecute(recorder, req)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown field, got %d", recorder.Code)
+	}
+}
+
+func TestClineHTTPTaskLifecycle(t *testing.T) {
+	backend := &recordingClineHTTPBackend{status: ideworker.DelegationStatus{ID: "task-1", Status: "completed", PartialResult: `{"status":"completed","summary":"done"}`}}
+	service := &localRAGService{clineBackend: backend}
+	start := httptest.NewRequest(http.MethodPost, "/api/cline/tasks", strings.NewReader(`{"session_id":"session-1","task":"fix tests","workspace_root":"/tmp"}`))
+	startRecorder := httptest.NewRecorder()
+	service.handleClineTaskStart(startRecorder, start)
+	if startRecorder.Code != http.StatusAccepted || !strings.Contains(startRecorder.Body.String(), "task-1") {
+		t.Fatalf("unexpected start response: %d %s", startRecorder.Code, startRecorder.Body.String())
+	}
+	status := httptest.NewRequest(http.MethodGet, "/api/cline/tasks/task-1", nil)
+	statusRecorder := httptest.NewRecorder()
+	service.handleClineTaskStatus(statusRecorder, status)
+	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), "completed") {
+		t.Fatalf("unexpected status response: %d %s", statusRecorder.Code, statusRecorder.Body.String())
+	}
+	cancel := httptest.NewRequest(http.MethodPost, "/api/cline/tasks/task-1/cancel", nil)
+	cancelRecorder := httptest.NewRecorder()
+	service.handleClineTaskCancel(cancelRecorder, cancel)
+	if cancelRecorder.Code != http.StatusOK || !strings.Contains(cancelRecorder.Body.String(), "cancelled") {
+		t.Fatalf("unexpected cancel response: %d %s", cancelRecorder.Code, cancelRecorder.Body.String())
 	}
 }

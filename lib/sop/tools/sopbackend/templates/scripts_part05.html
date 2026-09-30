@@ -3184,9 +3184,10 @@
         input.style.height = '40px';
         chatAbortController = new AbortController();
         updateComposerState();
+        let taskID = '';
 
         try {
-            const response = await localRuntimeFetch('/api/cline/execute', {
+            const response = await localRuntimeFetch('/api/cline/tasks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 signal: chatAbortController.signal,
@@ -3206,11 +3207,47 @@
             if (!response.ok || !payload.ok) {
                 throw new Error(payload.error || `Cline request failed (${response.status})`);
             }
-            const result = payload.result || {};
-            const summary = typeof result === 'string' ? result : (result.summary || JSON.stringify(result, null, 2));
-            appendChatMessage('ai', summary);
+            taskID = payload.task?.id || payload.task?.delegation_id || '';
+            if (!taskID) throw new Error('Cline task did not return a task id');
+            appendChatMessage('ai', `Cline task started: ${taskID}`);
+
+            while (true) {
+                const statusResponse = await localRuntimeFetch(`/api/cline/tasks/${encodeURIComponent(taskID)}`, {
+                    method: 'GET',
+                    signal: chatAbortController.signal
+                });
+                const statusPayload = await statusResponse.json().catch(() => ({}));
+                if (!statusResponse.ok || !statusPayload.ok) {
+                    throw new Error(statusPayload.error || `Cline status failed (${statusResponse.status})`);
+                }
+                const status = statusPayload.status || {};
+                if (status.progress || status.message) {
+                    console.debug('[Cline]', status.progress || status.message);
+                }
+                if (['completed', 'failed', 'cancelled'].includes(status.status)) {
+                    let result = status.partial_result || status.error || status.message || {};
+                    if (typeof result === 'string') {
+                        try { result = JSON.parse(result); } catch (_) { /* keep text */ }
+                    }
+                    const summary = typeof result === 'string' ? result : (result.summary || result.error || JSON.stringify(result, null, 2));
+                    appendChatMessage('ai', summary);
+                    break;
+                }
+                await new Promise((resolve, reject) => {
+                    const timeout = window.setTimeout(resolve, 1000);
+                    chatAbortController.signal.addEventListener('abort', () => {
+                        window.clearTimeout(timeout);
+                        reject(new DOMException('Aborted', 'AbortError'));
+                    }, { once: true });
+                });
+            }
         } catch (err) {
-            if (err.name !== 'AbortError') appendChatMessage('ai', `Cline error: ${err.message || err}`);
+            if (err.name === 'AbortError' && taskID) {
+                await localRuntimeFetch(`/api/cline/tasks/${encodeURIComponent(taskID)}/cancel`, { method: 'POST' }).catch(() => {});
+                appendChatMessage('ai', 'Cline task cancelled.');
+            } else if (err.name !== 'AbortError') {
+                appendChatMessage('ai', `Cline error: ${err.message || err}`);
+            }
         } finally {
             chatAbortController = null;
             updateComposerState();

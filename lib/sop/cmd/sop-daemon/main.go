@@ -1269,6 +1269,24 @@ func main() {
 		}
 		ragSvc.handleClineExecute(w, r)
 	})))))
+	mux.HandleFunc("/api/cline/tasks", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ragSvc == nil {
+			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
+			return
+		}
+		ragSvc.handleClineTaskStart(w, r)
+	})))))
+	mux.HandleFunc("/api/cline/tasks/", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ragSvc == nil {
+			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
+			return
+		}
+		if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/cancel") {
+			ragSvc.handleClineTaskCancel(w, r)
+			return
+		}
+		ragSvc.handleClineTaskStatus(w, r)
+	})))))
 	registerMCPRoute(mux, authHandler, ragSvc)
 
 	ragSvc.registerBridgeRoutes(mux, localRegistry, authHandler)
