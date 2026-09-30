@@ -121,3 +121,11 @@ func TestCollectClineWorkspaceChanges(t *testing.T) {
 		t.Fatalf("expected unified diff, got %q", changes[0].DiffDelta)
 	}
 }
+
+func TestClineRuntimeAvailableUsesSDKHostByDefault(t *testing.T) {
+	t.Setenv("SOP_CLINE_EXECUTION_MODE", "sdk")
+	t.Setenv("SOP_CLINE_SDK_HOST_PATH", filepath.Join(t.TempDir(), "host.js"))
+	if clineRuntimeAvailable() {
+		t.Fatal("expected unavailable SDK host before the host file exists")
+	}
+}

@@ -49,11 +49,27 @@ func newClineIDEWorkerBackend(shellSessions *ptyShellSessionManager) ideworker.B
 func (b *clineWorkerBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	_ = ctx
 	state := ideworker.SessionState{SessionID: strings.TrimSpace(sessionID), IDE: "cline"}
-	if _, _, err := b.shellSessions.Run(state.SessionID, "command -v cline", 2*time.Second); err == nil {
+	if clineRuntimeAvailable() {
 		state.Connected = true
 		state.WorkerCapabilities = append([]string(nil), ideworker.StandardCapabilities...)
 	}
 	return state, nil
+}
+
+func clineRuntimeAvailable() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("SOP_CLINE_EXECUTION_MODE")), "cli") {
+		_, err := exec.LookPath(clineExecutableName)
+		return err == nil
+	}
+	hostPath := resolveClineSDKHostPath(strings.TrimSpace(os.Getenv("SOP_CLINE_SDK_HOST_PATH")))
+	if strings.TrimSpace(hostPath) == "" || hostPath == "tools/cline-sdk-host/dist/host.js" {
+		return false
+	}
+	if _, err := os.Stat(hostPath); err != nil {
+		return false
+	}
+	_, err := exec.LookPath("node")
+	return err == nil
 }
 
 func (b *clineWorkerBackend) ExecuteTask(ctx context.Context, req ideworker.TaskRequest) (string, error) {
