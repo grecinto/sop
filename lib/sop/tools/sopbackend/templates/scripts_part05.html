@@ -822,7 +822,6 @@
     function updateComposerState() {
         const input = document.getElementById('chat-input');
         const sendBtn = document.getElementById('chat-send-btn');
-        const clineBtn = document.getElementById('chat-cline-btn');
         if (!sendBtn) return;
 
         const hasText = (input?.value || '').trim() !== '';
@@ -831,12 +830,6 @@
         sendBtn.disabled = !isBusy && !hasText && !hasAttachments;
         sendBtn.title = isBusy ? 'Abort request' : (hasText || hasAttachments ? 'Send message' : 'Type a message to send');
         sendBtn.setAttribute('aria-label', isBusy ? 'Abort request' : 'Send message');
-        if (clineBtn) {
-            const localMode = getChatRuntimeMode() === 'local';
-            clineBtn.style.display = localMode && !isBusy && hasText ? 'inline-flex' : 'none';
-            clineBtn.disabled = !localMode || isBusy || !hasText;
-            clineBtn.title = localMode ? 'Run this task with Cline SDK' : 'Cline is available in local daemon mode';
-        }
 
         const icon = sendBtn.querySelector('.chat-send-icon');
         if (icon) {
