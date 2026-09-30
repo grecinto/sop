@@ -802,9 +802,20 @@
             overlay.style.display = 'none';
             return;
         }
+        const workspaceInput = document.getElementById('chat-settings-workspace-root');
+        if (workspaceInput) workspaceInput.value = localStorage.getItem('sop_workspace_root') || '';
         syncChatControlsFromAIConfig(getStoredAIConfig());
         overlay.style.display = 'block';
     }
+
+    function persistChatWorkspaceRoot() {
+        const input = document.getElementById('chat-settings-workspace-root');
+        if (!input) return;
+        const value = input.value.trim();
+        if (value) localStorage.setItem('sop_workspace_root', value);
+        else localStorage.removeItem('sop_workspace_root');
+    }
+    window.persistChatWorkspaceRoot = persistChatWorkspaceRoot;
 
     function getProviderPoolInputValue(scopePrefix, provider) {
         const normalized = normalizeProviderSecretKey(provider);

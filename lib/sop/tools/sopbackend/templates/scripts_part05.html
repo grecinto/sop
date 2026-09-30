@@ -3199,7 +3199,7 @@
                     model: providerConfig.model,
                     api_key: chatAIConfig.brain_api_key || '',
                     base_url: chatAIConfig.brain_url || '',
-                    workspace_root: localStorage.getItem('sop_workspace_root') || '.',
+                    workspace_root: localStorage.getItem('sop_workspace_root') || document.getElementById('chat-settings-workspace-root')?.value.trim() || '.',
                     mode: 'act'
                 })
             });
