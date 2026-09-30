@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
@@ -96,13 +97,17 @@ type DelegationHandle struct {
 }
 
 type DelegationStatus struct {
-	ID            string `json:"delegation_id,omitempty"`
-	Status        string `json:"status,omitempty"`
-	Progress      string `json:"progress,omitempty"`
-	PartialResult string `json:"partial_result,omitempty"`
-	Message       string `json:"message,omitempty"`
-	Error         string `json:"error,omitempty"`
-	Cancelled     bool   `json:"cancelled,omitempty"`
+	ID            string    `json:"delegation_id,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	Progress      string    `json:"progress,omitempty"`
+	PartialResult string    `json:"partial_result,omitempty"`
+	Message       string    `json:"message,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	Cancelled     bool      `json:"cancelled,omitempty"`
+	Phase         string    `json:"phase,omitempty"`
+	ActivityKind  string    `json:"activity_kind,omitempty"`
+	ActivityLabel string    `json:"activity_label,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
 }
 
 type Backend interface {

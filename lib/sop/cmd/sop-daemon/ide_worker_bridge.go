@@ -43,6 +43,9 @@ type delegationRecord struct {
 	Message       string
 	Error         string
 	Cancelled     bool
+	Phase         string
+	ActivityKind  string
+	ActivityLabel string
 	StartedAt     time.Time
 	LastUpdated   time.Time
 	Timeout       time.Duration
@@ -68,6 +71,10 @@ func (t *delegationTracker) status(delegationID string) (ideworker.DelegationSta
 		Message:       record.Message,
 		Error:         record.Error,
 		Cancelled:     record.Cancelled,
+		Phase:         record.Phase,
+		ActivityKind:  record.ActivityKind,
+		ActivityLabel: record.ActivityLabel,
+		UpdatedAt:     record.LastUpdated,
 	}, nil
 }
 

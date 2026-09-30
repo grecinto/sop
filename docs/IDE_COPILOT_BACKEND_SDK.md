@@ -36,6 +36,12 @@ Rules that do not change when you add a backend:
 - The daemon LLM decides *when* to delegate by calling the `delegate_continue_task` tool exposed by `ideworker.Capability`. Your backend does not call back into Ask; it receives one bounded task and returns one structured result.
 - AI Studio owns memory, KnowledgeBase guidance, approvals, prompt/diff history, and undo checkpoints regardless of which backend executed the work.
 
+The production AI Chat UI exposes one Send action. It does not expose separate
+Continue, Cline, or backend-specific buttons. The copilot capability's
+`Classify()` and Ask/ReAct routing decide when a coding slice should be delegated
+to the configured Cline backend. Direct Cline HTTP task routes may remain for
+testing and diagnostics, but they are not a second production controller.
+
 ## Cline Memory and Checkpoint Boundary
 
 Cline brings its own local persistence and recovery features:
@@ -185,6 +191,42 @@ The imported transaction should preserve correlation metadata including
 `delegation_id`, Cline session/task ID, checkpoint reference when available,
 workspace root, requested phase, and validation outcome. This provides a link
 between both histories without creating two competing sources of truth.
+
+## Activity Event Contract
+
+An IDE copilot backend may emit verbose internal events, but the AI Studio Chat
+surface should receive only a filtered high-level activity stream. Cline SDK
+activity should be grouped into one in-place assistant message per delegated
+task, followed by the final `ExecutionResult` summary.
+
+Recommended activity categories are:
+
+```text
+started, planning, investigating, tool, validation, checkpoint,
+waiting, completed, failed, cancelled
+```
+
+The Terminal surface may continue to display raw PTY output for diagnostics.
+The Chat surface must not display credentials, raw provider payloads, internal
+reasoning, or every SDK iteration.
+
+For the first transport, `DelegationStatus.Progress`, `Message`, and
+`PartialResult` can carry the filtered state. A more explicit backend-neutral
+contract can add:
+
+```go
+type Activity struct {
+    Phase        string `json:"phase,omitempty"`
+    Kind         string `json:"activity_kind,omitempty"`
+    Label        string `json:"activity_label,omitempty"`
+    UpdatedAt    string `json:"updated_at,omitempty"`
+}
+```
+
+The Data Manager should poll or consume events at roughly one-second intervals,
+coalesce identical messages, throttle visible updates to at least 500 ms apart,
+and replace the activity message with the final result when the task reaches a
+terminal state.
 
 ## The Interface You Implement
 

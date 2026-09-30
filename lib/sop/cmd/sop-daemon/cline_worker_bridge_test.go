@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 )
@@ -127,5 +128,18 @@ func TestClineRuntimeAvailableUsesSDKHostByDefault(t *testing.T) {
 	t.Setenv("SOP_CLINE_SDK_HOST_PATH", filepath.Join(t.TempDir(), "host.js"))
 	if clineRuntimeAvailable() {
 		t.Fatal("expected unavailable SDK host before the host file exists")
+	}
+}
+
+func TestDelegationStatusIncludesStructuredClineActivity(t *testing.T) {
+	backend := &clineWorkerBackend{delegationTracker: delegationTracker{delegations: map[string]*delegationRecord{
+		"task-1": {ID: "task-1", Status: "running", Phase: "execution", ActivityKind: "validation", ActivityLabel: "Running validation...", LastUpdated: time.Unix(10, 0)},
+	}}}
+	status, err := backend.GetTaskStatus(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("GetTaskStatus failed: %v", err)
+	}
+	if status.Phase != "execution" || status.ActivityKind != "validation" || status.ActivityLabel != "Running validation..." || status.UpdatedAt.IsZero() {
+		t.Fatalf("structured activity missing: %#v", status)
 	}
 }

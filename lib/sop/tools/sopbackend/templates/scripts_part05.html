@@ -3237,7 +3237,7 @@
                     throw new Error(statusPayload.error || `Cline status failed (${statusResponse.status})`);
                 }
                 const status = statusPayload.status || {};
-                updateClineActivity(summarizeClineActivity(status));
+                updateClineActivity(status.activity_label || summarizeClineActivity(status));
                 if (['completed', 'failed', 'cancelled'].includes(status.status)) {
                     let result = status.partial_result || status.error || status.message || {};
                     if (typeof result === 'string') {

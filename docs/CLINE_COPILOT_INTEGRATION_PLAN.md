@@ -11,6 +11,88 @@ Cline request cancellation is also propagated into the daemon's isolated PTY
 worker, so aborting the Data Manager request terminates the running SDK task
 instead of merely hiding the response.
 
+## Cline Activity in AI Chat History
+
+The AI Chat window should show a filtered, high-level activity timeline for a
+Cline task without dumping Cline's raw SDK loop, model output, or tool JSON into
+the conversation. Each task should create one assistant activity bubble that
+updates in place and becomes the final result when the task completes.
+
+Example:
+
+```text
+Cline SDK
+Planning task...
+
+Cline SDK
+Investigating workspace...
+
+Cline SDK
+Running tests...
+
+Cline SDK
+Found 2 failing tests. Updating app.py.
+
+Cline SDK completed
+Updated app.py and test_math.py.
+Validation: Python assertion passed.
+```
+
+### User-facing activity categories
+
+The SDK/daemon event stream should reduce internal events to a small stable
+taxonomy:
+
+| Category | Example message |
+|---|---|
+| `started` | `Cline SDK started` |
+| `planning` | `Planning task...` |
+| `investigating` | `Investigating workspace...` |
+| `tool` | `Reading files...` or `Running tests...` |
+| `validation` | `Validating changes...` |
+| `checkpoint` | `Checkpoint created` |
+| `waiting` | `Waiting for model response...` |
+| `completed` | Final summary with files and validation |
+| `failed` | Bounded failure summary |
+| `cancelled` | `Cline task cancelled` |
+
+Do not expose raw model responses, full prompts, API payloads, credentials,
+internal reasoning, or every Cline iteration in the Chat history. Those details
+belong in the Terminal pane or daemon logs when diagnostic visibility is needed.
+
+### Timing and transport
+
+The initial `/api/cline/tasks` response should emit `started` immediately. The
+Data Manager may poll `/api/cline/tasks/{id}` once per second, but should update
+the visible activity bubble only when the message changes and no more often than
+every 500 ms. A status that has not changed for five seconds may be refreshed to
+show that the task remains active. The final terminal result replaces the
+activity bubble rather than creating another verbose message.
+
+The current `DelegationStatus.Progress`, `Message`, and `PartialResult` fields
+are sufficient for the first implementation. The stable follow-up contract may
+add:
+
+```text
+phase          intake | investigation | planning | execution | validation | delivery
+activity_kind  planning | tool | validation | checkpoint | waiting
+activity_label short user-facing label
+updated_at     timestamp
+```
+
+The structured activity fields are now implemented in the shared delegation
+status contract and populated by the Cline backend. The Data Manager prefers
+`activity_label` for its single in-place Chat bubble and falls back to the
+legacy progress/message fields for compatibility.
+
+The surfaces remain intentionally separate:
+
+```text
+AI Chat history: filtered high-level Cline activity and final summary
+Terminal pane:  raw PTY/SDK output and diagnostics
+Undo/history:   structured files, diffs, validation, and restore controls
+```
+
 The intended product surface is the AI Studio floating AI window. It can remain
 visible while the developer works in VS Code, IntelliJ, or another application.
 The IDE remains the developer's workspace and editor; AI Studio is the consistent
@@ -20,25 +102,28 @@ the daemon. No Cline IDE extension is required for this workflow.
 The AI Chat window is the SOP Data Manager UI served by `httpserver`/`sopbackend`
 templates. The React site is only the account/site launcher that opens Data
 Manager in daemon mode. The normal Chat Send action continues through
-`/api/ask` and SOP Ask/RAG orchestration; an explicit Cline action in the same
-composer calls the authenticated daemon `/api/cline/execute` route. This keeps
-the UI integration in the existing Data Manager runtime and preserves SOP as
-the default controller.
+`/api/ask` and SOP Ask/RAG orchestration. The production composer has one
+primary Send action; SOP classification decides whether the copilot workflow
+capability delegates a bounded coding slice to Cline. The direct Cline task
+route remains an internal testing/diagnostic surface, not a second production
+button. This keeps the UI integration in the existing Data Manager runtime and
+preserves SOP as the single controller.
 
 ### Manual Data Manager smoke test
 
 1. Start `sop-daemon` with the configured `cline` backend and start `httpserver`.
 2. Open the Data Manager AI Chat window in daemon mode from the React site.
 3. Configure a provider/model and API key in the existing local AI settings.
-4. Type a bounded task and use the `C` action beside the normal Send control.
-5. Confirm the result reports completion and modified files; cancel during a
+4. Type a bounded coding task and use the normal Send control.
+5. Confirm SOP classification delegates the coding slice to Cline, the result
+   reports completion and modified files, and cancel during a
 	long task to verify the Cline worker stops.
-6. Use the normal Chat Send control separately to verify `/api/ask` still uses
-	SOP Ask/RAG orchestration.
+6. Use a non-coding question to verify `/api/ask` remains SOP-owned without
+	delegating to Cline.
 
-The `C` action is intentionally explicit. Normal Chat Send remains the default
-SOP-controlled workflow; direct Cline execution is an opt-in execution surface
-inside the same Data Manager floater.
+The direct Cline route is retained for backend testing and diagnostics. Users
+should see one Send action, with Cline delegation decided by SOP's copilot
+workflow capability rather than by exposing backend-specific choices in the UI.
 
 **Update 2026-09-29**: the user's Cline fork (`https://github.com/grecinto/cline.git`) is now cloned locally at `/Volumes/T7/cline` — a sibling of this repo (`/Volumes/T7/sop-cloud`), not nested inside it like `.continue-repo`. Both are opened together via `/Volumes/T7/sop-cloud-cline.code-workspace`. Confirmed Apache-2.0 licensed (permissive, supports porting logic under Option A). It has one uninitialized git submodule (`evals/cline-bench`) not needed for integration work. The rest of this document still describes the plan at a public-knowledge level — the next step is to re-verify every claim below against this real clone before writing integration code, the same way [IDE_COPILOT_CLIENT_INTEGRATION.md](IDE_COPILOT_CLIENT_INTEGRATION.md) was grounded against `.continue-repo`.
 
@@ -318,6 +403,7 @@ not for validating the bridge protocol or MCP tool contract.
 9. ~~Add read-only undo-history MCP access~~ — done. `search_undo_history` delegates to SOP's existing `UndoManager.SemanticSearch`; restore remains an explicit future mutation requiring confirmation and active-session invalidation.
 10. ~~Add validation reporting through MCP~~ — done. `record_validation` stores Cline test/build outcomes in the scoped AI Studio session context for guidance, history, and later memory promotion.
 11. ~~Add confirmed undo restoration through MCP~~ — done. `restore_undo_transaction` requires `confirm=true`, creates a safety backup, verifies hashes, restores through `UndoManager`, and marks the associated Cline session stale.
+12. ~~Add SDK host packaging validation~~ — done for the local release prototype. `tools/cline-sdk-host/package-runtime.sh` verifies Node 22+, runs `npm ci` and the host build, and creates a deployable host directory containing the lockfile, package metadata, config, and `dist/host.js`.
 9. ~~Add daemon-side before/after workspace diff capture and import `ModifiedFiles` into the shared SOP undo/memory pipeline~~ — done in `cline_worker_bridge.go`. The daemon hashes the workspace before and after the SDK task, emits modified-file CRUD/diff records, and reuses the shared SOP undo and execution-memory recorders.
 10. Keep the daemon-side boundary shared: Continue and Cline both implement `ideworker.Backend`, use the exported `ideworker` capability/result types, and share delegation tracking/status projection. Their execution adapters remain separate because Continue calls a registered editor callback while Cline uses a daemon-managed SDK host. Cline is the default and shipping backend; Continue is retained only as a reference/compatibility implementation.
 11. Decide whether/how to support optional IDE-specific surfaces later; no VS Code or IntelliJ extension is required for the core floating-window workflow.

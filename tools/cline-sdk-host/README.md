@@ -56,5 +56,11 @@ npm run build
 printf '%s\n' '{"type":"run","requestId":"req-1","task":"Inspect the tests and report the first failure","workspaceRoot":"/tmp/repo","providerId":"openai","modelId":"gpt-5"}' | npm start
 ```
 
+Create a deployable host directory:
+
+```sh
+./package-runtime.sh /path/to/release/cline-sdk-host
+```
+
 The host boundary carries session and request identity so MCP calls are scoped
 to the same SOP workflow.

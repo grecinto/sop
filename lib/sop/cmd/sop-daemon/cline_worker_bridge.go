@@ -144,7 +144,7 @@ func (b *clineWorkerBackend) StartTask(ctx context.Context, req ideworker.TaskRe
 	}
 	id := req.RequestID
 	now := time.Now()
-	record := &delegationRecord{ID: id, Status: "running", Progress: "submitted", Message: "Cline task started", StartedAt: now, LastUpdated: now}
+	record := &delegationRecord{ID: id, Status: "running", Progress: "submitted", Message: "Cline task started", Phase: "intake", ActivityKind: "started", ActivityLabel: "Cline SDK started", StartedAt: now, LastUpdated: now}
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
 		sessionID = "cline-default"
@@ -170,6 +170,9 @@ func (b *clineWorkerBackend) StartTask(ctx context.Context, req ideworker.TaskRe
 			b.mu.Lock()
 			record.Progress = "running"
 			record.Message = message
+			record.Phase = "execution"
+			record.ActivityKind = clineActivityKind(message)
+			record.ActivityLabel = clineActivityLabel(message)
 			record.LastUpdated = time.Now()
 			b.mu.Unlock()
 		})
@@ -182,12 +185,17 @@ func (b *clineWorkerBackend) StartTask(ctx context.Context, req ideworker.TaskRe
 		if err != nil {
 			record.Status = "failed"
 			record.Progress = "failed"
+			record.ActivityKind = "failed"
+			record.ActivityLabel = "Cline task failed"
 			record.Error = err.Error()
 			record.Message = "Cline task failed"
 			return
 		}
 		record.Status = "completed"
 		record.Progress = "finished"
+		record.Phase = "delivery"
+		record.ActivityKind = "completed"
+		record.ActivityLabel = "Cline task completed"
 		record.PartialResult = result
 		record.Message = "Cline task completed"
 	}()
@@ -217,8 +225,50 @@ func (b *clineWorkerBackend) CancelTask(ctx context.Context, delegationID string
 	record.Status = "cancelled"
 	record.Progress = "cancelled"
 	record.Message = "Cline task cancelled"
+	record.ActivityKind = "cancelled"
+	record.ActivityLabel = "Cline task cancelled"
 	record.LastUpdated = time.Now()
-	return ideworker.DelegationStatus{ID: record.ID, Status: record.Status, Progress: record.Progress, PartialResult: record.PartialResult, Message: record.Message, Error: record.Error, Cancelled: record.Cancelled}, nil
+	return ideworker.DelegationStatus{
+		ID: record.ID, Status: record.Status, Progress: record.Progress,
+		Message: record.Message, Error: record.Error, Cancelled: record.Cancelled,
+		Phase: record.Phase, ActivityKind: record.ActivityKind,
+		ActivityLabel: record.ActivityLabel, UpdatedAt: record.LastUpdated,
+	}, nil
+}
+
+func clineActivityKind(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "test"), strings.Contains(lower, "validate"):
+		return "validation"
+	case strings.Contains(lower, "read"), strings.Contains(lower, "grep"), strings.Contains(lower, "search"), strings.Contains(lower, "inspect"):
+		return "investigating"
+	case strings.Contains(lower, "edit"), strings.Contains(lower, "write"), strings.Contains(lower, "patch"), strings.Contains(lower, "file"):
+		return "tool"
+	case strings.Contains(lower, "checkpoint"):
+		return "checkpoint"
+	case strings.Contains(lower, "plan"), strings.Contains(lower, "reason"):
+		return "planning"
+	default:
+		return "tool"
+	}
+}
+
+func clineActivityLabel(message string) string {
+	switch clineActivityKind(message) {
+	case "validation":
+		return "Running validation..."
+	case "investigating":
+		return "Investigating workspace..."
+	case "tool":
+		return "Updating workspace..."
+	case "checkpoint":
+		return "Checkpoint created"
+	case "planning":
+		return "Planning task..."
+	default:
+		return "Working in workspace..."
+	}
 }
 
 func clineCommand(req ideworker.TaskRequest) (string, error) {
