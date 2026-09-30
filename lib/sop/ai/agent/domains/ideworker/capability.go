@@ -73,6 +73,8 @@ type TaskRequest struct {
 	Mode           string
 	Provider       string
 	Model          string
+	APIKey         string
+	BaseURL        string
 	RequestedPhase string
 	AvailableTools []string
 	PhaseTools     []string

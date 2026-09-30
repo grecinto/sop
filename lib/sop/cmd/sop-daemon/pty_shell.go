@@ -367,7 +367,40 @@ func newPTYShellSessionManager() *ptyShellSessionManager {
 
 // Run executes a command in a persistent PTY shell session
 func (m *ptyShellSessionManager) Run(sessionID, command string, timeout time.Duration) (string, bool, error) {
-	return m.RunWithStreaming(sessionID, command, timeout, nil)
+	return m.RunWithContext(context.Background(), sessionID, command, timeout, nil)
+}
+
+// RunWithContext executes a command and terminates the isolated worker if the
+// caller cancels. This keeps long-running delegated agents from surviving an
+// aborted HTTP request or user cancellation.
+func (m *ptyShellSessionManager) RunWithContext(ctx context.Context, sessionID, command string, timeout time.Duration, streamCallback StreamCallback) (string, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resultCh := make(chan struct {
+		output  string
+		running bool
+		err     error
+	}, 1)
+	go func() {
+		output, running, err := m.RunWithStreaming(sessionID, command, timeout, streamCallback)
+		resultCh <- struct {
+			output  string
+			running bool
+			err     error
+		}{output: output, running: running, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.output, result.running, result.err
+	case <-ctx.Done():
+		workerID := sessionID
+		if strings.TrimSpace(workerID) == "" {
+			workerID = "default"
+		}
+		_ = getGlobalWorkerManager().killWorker(workerID)
+		return "", false, ctx.Err()
+	}
 }
 
 // GetWorkingDirectory returns the live working directory for a persistent shell session.

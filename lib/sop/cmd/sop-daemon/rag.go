@@ -18,6 +18,7 @@ import (
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/tools/sopbackend"
@@ -575,6 +576,7 @@ type localRAGService struct {
 	shellSessions   *ptyShellSessionManager
 	continueState   *continueBridgeSessionStore
 	continueWorkers *continueBridgeWorkerStore
+	clineBackend    ideworker.Backend
 }
 
 var globalShellSessionManager = newPTYShellSessionManager()
@@ -596,7 +598,8 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 	if svc, err := autoProvisionSharedCopilotService(context.Background()); err == nil {
 		log.Printf("daemon newLocalRAGService: using auto-provisioned shared service")
 		localService := &localRAGService{service: svc, shellSessions: newPTYShellSessionManager(), continueState: newContinueBridgeSessionStore(), continueWorkers: newContinueBridgeWorkerStore()}
-		injectIDEWorkerBackend(localService.service, newDefaultIDEWorkerBackend(localService))
+		localService.clineBackend = newConfiguredIDEWorkerBackend(localService)
+		injectIDEWorkerBackend(localService.service, localService.clineBackend)
 		return localService, nil
 	} else {
 		log.Printf("daemon newLocalRAGService: shared RAG runtime unavailable: %v", err)

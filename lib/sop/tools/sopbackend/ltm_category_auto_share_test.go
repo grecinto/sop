@@ -32,17 +32,17 @@ func TestShouldShowCategoryAutoShareControls(t *testing.T) {
 
 func TestAnnotateCategoryAutoShareVisibility(t *testing.T) {
 	authCtx := sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}}
-	category := map[string]any{"path": "workflow_pattern"}
+	category := map[string]any{"path": "Fleet Learning/workflow_pattern"}
 
-	annotateCategoryAutoShareVisibility(category, authCtx, "shared_memory", true)
+	annotateCategoryAutoShareVisibility(category, authCtx, "core_playbook", true)
 
 	visible, ok := category["show_category_auto_share_controls"].(bool)
-	if !ok || !visible {
-		t.Fatal("expected eligible category to expose auto-share controls")
+	if !ok || visible {
+		t.Fatal("expected current allowlist matching to keep mixed-case category path hidden")
 	}
 
 	category["path"] = "debug_logs"
-	annotateCategoryAutoShareVisibility(category, authCtx, "shared_memory", true)
+	annotateCategoryAutoShareVisibility(category, authCtx, "core_playbook", true)
 
 	visible, ok = category["show_category_auto_share_controls"].(bool)
 	if !ok || visible {

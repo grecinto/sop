@@ -116,11 +116,13 @@ func FirstNonEmpty(values ...string) string {
 
 func NormalizeWorkflowBackend(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "continue", "continue_worker", "continue_delegate", "ide_worker":
+	case "continue", "continue_worker", "continue_delegate", "ide_worker":
 		return "continue"
+	case "cline", "cline_cli":
+		return "cline"
 	case "daemon", "daemon_shell", "local_daemon", "shell":
 		return "daemon"
 	default:
-		return "continue"
+		return "cline"
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -115,40 +116,13 @@ type continueIDEPhaseDefinition struct {
 	AvailableTools []string `json:"available_tools,omitempty"`
 }
 
-type continueExecutionResultContract struct {
-	StreamProgress       bool `json:"stream_progress,omitempty"`
-	IncludeModifiedFiles bool `json:"include_modified_files,omitempty"`
-	IncludeDiffDeltas    bool `json:"include_diff_deltas,omitempty"`
-	IncludeMetadata      bool `json:"include_metadata,omitempty"`
-	PreferArtifactRefs   bool `json:"prefer_artifact_refs,omitempty"`
-	MaxInlineDiffBytes   int  `json:"max_inline_diff_bytes,omitempty"`
-}
-
-type continueExecutionArtifact struct {
-	ID          string         `json:"id,omitempty"`
-	Kind        string         `json:"kind,omitempty"`
-	Path        string         `json:"path,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-}
-
-type continueExecutionModifiedFile struct {
-	FilePath        string         `json:"file_path,omitempty"`
-	CRUDOperation   string         `json:"crud_operation,omitempty"`
-	DiffSummary     string         `json:"diff_summary,omitempty"`
-	DiffDelta       string         `json:"diff_delta,omitempty"`
-	DiffFormat      string         `json:"diff_format,omitempty"`
-	DiffArtifactRef string         `json:"diff_artifact_ref,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
-}
-
-type continueExecutionResult struct {
-	Status        string                          `json:"status,omitempty"`
-	Summary       string                          `json:"summary,omitempty"`
-	ModifiedFiles []continueExecutionModifiedFile `json:"modified_files,omitempty"`
-	Artifacts     []continueExecutionArtifact     `json:"artifacts,omitempty"`
-	Metadata      map[string]any                  `json:"metadata,omitempty"`
-}
+// These are aliases of the canonical SDK contract in the ideworker package
+// (see docs/IDE_COPILOT_BACKEND_SDK.md) so the Continue reference implementation
+// consumes exactly the same structured result shape any other backend would.
+type continueExecutionResultContract = ideworker.ResultContract
+type continueExecutionArtifact = ideworker.Artifact
+type continueExecutionModifiedFile = ideworker.ModifiedFile
+type continueExecutionResult = ideworker.ExecutionResult
 
 type continueExecutionEvent struct {
 	Type          string         `json:"type,omitempty"`
@@ -235,6 +209,7 @@ type continueSessionSnapshot struct {
 	WorkspaceRoot   string                   `json:"workspace_root,omitempty"`
 	ExecutionResult *continueExecutionResult `json:"execution_result,omitempty"`
 	ExecutionEvents []continueExecutionEvent `json:"execution_events,omitempty"`
+	Validation      map[string]any           `json:"validation,omitempty"`
 }
 
 type continueWorkerCallbackOutcome struct {
@@ -364,7 +339,7 @@ var continueUndoSpaceRegistry = map[string]*continueUndoSpaceClient{}
 var continueUndoManagerCache = make(map[string]*codingworkflow.UndoManager)
 var continueUndoManagerCacheMu sync.RWMutex
 
-var continueWorkerCapabilityCatalog = []string{"read_context", "apply_patch", "edit_code", "diff_review", "plan_changes"}
+var continueWorkerCapabilityCatalog = ideworker.StandardCapabilities
 
 const continueWorkerRawBodyLimit = 64 * 1024
 const continueExecutionEventLimit = 64
@@ -462,42 +437,29 @@ func (s *continueBridgeWorkerStore) Get(sessionID string) (continueWorkerRegistr
 	return registration, ok
 }
 
+// continueSessionWorkerCapableOfEdit reports whether sessionID has a registered Continue
+// worker that advertises edit capability, so Ask can be forced to delegate instead of
+// falling back to daemon-local patch tools.
+func (s *localRAGService) continueSessionWorkerCapableOfEdit(sessionID string) bool {
+	if s == nil {
+		return false
+	}
+	registration, ok := s.ensureContinueWorkerStore().Get(sessionID)
+	if !ok {
+		return false
+	}
+	return continueWorkerSupportsCapabilities(registration, []string{ideworker.CapabilityApplyPatch})
+}
+
+// normalizeContinueWorkerCapabilities and continueWorkerSupportsCapabilities delegate to the
+// exported ideworker SDK helpers so the Continue reference implementation and any third-party
+// backend share one capability-matching contract.
 func normalizeContinueWorkerCapabilities(capabilities []string) []string {
-	if len(capabilities) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(capabilities))
-	normalized := make([]string, 0, len(capabilities))
-	for _, capability := range capabilities {
-		capability = strings.ToLower(strings.TrimSpace(capability))
-		if capability == "" || seen[capability] {
-			continue
-		}
-		seen[capability] = true
-		normalized = append(normalized, capability)
-	}
-	sort.Strings(normalized)
-	return normalized
+	return ideworker.NormalizeCapabilities(capabilities)
 }
 
 func continueWorkerSupportsCapabilities(registration continueWorkerRegistration, required []string) bool {
-	if len(required) == 0 {
-		return true
-	}
-	available := make(map[string]bool, len(registration.Capabilities))
-	for _, capability := range registration.Capabilities {
-		available[strings.ToLower(strings.TrimSpace(capability))] = true
-	}
-	for _, capability := range required {
-		capability = strings.ToLower(strings.TrimSpace(capability))
-		if capability == "" {
-			continue
-		}
-		if !available[capability] {
-			return false
-		}
-	}
-	return true
+	return ideworker.SupportsCapabilities(registration.Capabilities, required...)
 }
 
 func validateContinueWorkerCallbackURL(raw string) error {
@@ -969,7 +931,7 @@ func (continueBridgeTransport) handleChat(s *localRAGService, w http.ResponseWri
 	}
 	normalizeContinueWorkspaceContext(&req)
 	s.storeContinueSessionContext(req)
-	envelope, err := buildContinueBridgeEnvelope(req)
+	envelope, err := buildContinueBridgeEnvelope(req, s.continueSessionWorkerCapableOfEdit(req.SessionID))
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -1062,7 +1024,7 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		}
 	}
 
-	envelope, err := buildContinueBridgeEnvelope(chatReq)
+	envelope, err := buildContinueBridgeEnvelope(chatReq, s.continueSessionWorkerCapableOfEdit(chatReq.SessionID))
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -1663,7 +1625,7 @@ func normalizeContinueWorkspaceContext(req *continueChatRequest) {
 	req.Workspace.Root = resolveContinueWorkspaceRoot(trimmedRoot)
 }
 
-func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, error) {
+func buildContinueBridgeEnvelope(req continueChatRequest, workerCapableEdit bool) (bridgeChatEnvelope, error) {
 	normalizeContinueWorkspaceContext(&req)
 	if strings.TrimSpace(req.Message) == "" {
 		return bridgeChatEnvelope{}, fmt.Errorf("message cannot be empty")
@@ -1673,6 +1635,10 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	}
 
 	variables := map[string]any{"continue_bridge": true, "workspace_root": req.Workspace.Root}
+	if workerCapableEdit {
+		// Forces Ask to delegate coding execution to Continue instead of patching files itself.
+		variables["continue_worker_capable_edit"] = true
+	}
 	availableToolNames := continueRequestToolNames(req.Tools)
 	workflowProfile, requestedPhase := resolveContinueWorkflowProfile(req.Mode, req.Message)
 	routingHint := inferContinueRoutingHint(req, workflowProfile, requestedPhase)
@@ -2367,7 +2333,7 @@ func (continueBridgeTransport) DecodeChatRequest(r *http.Request) (bridgeChatEnv
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return bridgeChatEnvelope{}, fmt.Errorf("Invalid JSON body: %w", err)
 	}
-	return buildContinueBridgeEnvelope(req)
+	return buildContinueBridgeEnvelope(req, false)
 }
 
 func (continueBridgeTransport) StreamChat(w http.ResponseWriter, envelope bridgeChatEnvelope, ask bridgeAskInvoker) {

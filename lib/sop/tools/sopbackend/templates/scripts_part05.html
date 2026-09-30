@@ -822,6 +822,7 @@
     function updateComposerState() {
         const input = document.getElementById('chat-input');
         const sendBtn = document.getElementById('chat-send-btn');
+        const clineBtn = document.getElementById('chat-cline-btn');
         if (!sendBtn) return;
 
         const hasText = (input?.value || '').trim() !== '';
@@ -830,6 +831,11 @@
         sendBtn.disabled = !isBusy && !hasText && !hasAttachments;
         sendBtn.title = isBusy ? 'Abort request' : (hasText || hasAttachments ? 'Send message' : 'Type a message to send');
         sendBtn.setAttribute('aria-label', isBusy ? 'Abort request' : 'Send message');
+        if (clineBtn) {
+            const localMode = getChatRuntimeMode() === 'local';
+            clineBtn.style.display = localMode && !isBusy && hasText ? 'inline-flex' : 'none';
+            clineBtn.disabled = !localMode || isBusy || !hasText;
+        }
 
         const icon = sendBtn.querySelector('.chat-send-icon');
         if (icon) {
@@ -3161,6 +3167,56 @@
              }
         }
     }
+
+    async function runClineTaskFromChat() {
+        const input = document.getElementById('chat-input');
+        const task = input ? input.value.trim() : '';
+        if (!task || getChatRuntimeMode() !== 'local' || chatAbortController) return;
+
+        const chatAIConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
+        const providerConfig = typeof normalizeProviderConfig === 'function'
+            ? normalizeProviderConfig(chatAIConfig.brain_provider || '', chatAIConfig.brain_model || '')
+            : { provider: chatAIConfig.brain_provider || '', model: chatAIConfig.brain_model || '' };
+        const sessionID = currentSessionID || 'local-daemon';
+        const displayMessage = `Cline: ${task}`;
+        appendChatMessage('user', displayMessage);
+        input.value = '';
+        input.style.height = '40px';
+        chatAbortController = new AbortController();
+        updateComposerState();
+
+        try {
+            const response = await localRuntimeFetch('/api/cline/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: chatAbortController.signal,
+                body: JSON.stringify({
+                    request_id: `floater-${Date.now()}`,
+                    session_id: sessionID,
+                    task,
+                    provider: providerConfig.provider,
+                    model: providerConfig.model,
+                    api_key: chatAIConfig.brain_api_key || '',
+                    base_url: chatAIConfig.brain_url || '',
+                    workspace_root: localStorage.getItem('sop_workspace_root') || '.',
+                    mode: 'act'
+                })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.ok) {
+                throw new Error(payload.error || `Cline request failed (${response.status})`);
+            }
+            const result = payload.result || {};
+            const summary = typeof result === 'string' ? result : (result.summary || JSON.stringify(result, null, 2));
+            appendChatMessage('ai', summary);
+        } catch (err) {
+            if (err.name !== 'AbortError') appendChatMessage('ai', `Cline error: ${err.message || err}`);
+        } finally {
+            chatAbortController = null;
+            updateComposerState();
+        }
+    }
+    window.runClineTaskFromChat = runClineTaskFromChat;
 
     let _currentApprovalPayload = null;
     let _currentApprovalResolve = null;

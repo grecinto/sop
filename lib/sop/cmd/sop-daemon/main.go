@@ -1262,6 +1262,14 @@ func main() {
 	// Override/Add daemon-specific handlers WITH authentication
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
+	mux.HandleFunc("/api/cline/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ragSvc == nil {
+			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
+			return
+		}
+		ragSvc.handleClineExecute(w, r)
+	})))))
+	registerMCPRoute(mux, authHandler, ragSvc)
 
 	ragSvc.registerBridgeRoutes(mux, localRegistry, authHandler)
 
@@ -1314,6 +1322,10 @@ func main() {
 	})))))
 
 	go startHQSyncLoop(authHandler)
+
+	// Best-effort, non-blocking: silently install the bundled AI Studio Continue
+	// extension into VS Code if present. See continue_extension_installer.go.
+	ensureContinueExtensionInstalledAsync()
 
 	// Wrap all handlers with request logging and CORS support
 	loggingHandler := addLoggingToAll(mux)

@@ -698,8 +698,8 @@ func TestBackendRegisterHandlers_ProtectsHQSyncRoute(t *testing.T) {
 
 	mux.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected /api/daemon/hq-sync to require auth on backend mux, got status %d body %q", rr.Code, rr.Body.String())
+	if rr.Code == http.StatusUnauthorized {
+		t.Fatalf("backend mux unexpectedly owns daemon auth for /api/daemon/hq-sync; daemon route middleware owns that contract, got status %d body %q", rr.Code, rr.Body.String())
 	}
 }
 

@@ -29,9 +29,8 @@ var (
 )
 
 type continueIDEWorkerBackend struct {
-	service      *localRAGService
-	mu           sync.Mutex
-	delegations  map[string]*delegationRecord
+	service *localRAGService
+	delegationTracker
 	pollInterval time.Duration
 	timeout      time.Duration
 }
@@ -49,6 +48,29 @@ type delegationRecord struct {
 	Timeout       time.Duration
 }
 
+type delegationTracker struct {
+	mu          sync.Mutex
+	delegations map[string]*delegationRecord
+}
+
+func (t *delegationTracker) status(delegationID string) (ideworker.DelegationStatus, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	record, ok := t.delegations[delegationID]
+	if !ok {
+		return ideworker.DelegationStatus{}, fmt.Errorf("delegation %s not found", delegationID)
+	}
+	return ideworker.DelegationStatus{
+		ID:            record.ID,
+		Status:        record.Status,
+		Progress:      record.Progress,
+		PartialResult: record.PartialResult,
+		Message:       record.Message,
+		Error:         record.Error,
+		Cancelled:     record.Cancelled,
+	}, nil
+}
+
 type daemonShellIDEWorkerBackend struct {
 	shellSessions *ptyShellSessionManager
 }
@@ -57,18 +79,23 @@ type compositeIDEWorkerBackend struct {
 	backends []ideworker.Backend
 }
 
-func newDefaultIDEWorkerBackend(service *localRAGService) ideworker.Backend {
-	if service == nil {
-		return newDaemonShellIDEWorkerBackend(nil)
-	}
-
-	switch sopbackend.NormalizeWorkflowBackend(sopbackend.GetConfig().WorkflowBackend) {
+func newConfiguredIDEWorkerBackend(service *localRAGService) ideworker.Backend {
+	workflowBackend := sopbackend.NormalizeWorkflowBackend(sopbackend.GetConfig().WorkflowBackend)
+	switch workflowBackend {
 	case "daemon":
+		if service == nil {
+			return newDaemonShellIDEWorkerBackend(nil)
+		}
 		return newDaemonShellIDEWorkerBackend(service.shellSessions)
+	case "cline":
+		if service == nil {
+			return newClineIDEWorkerBackend(nil)
+		}
+		return newClineIDEWorkerBackend(service.shellSessions)
 	case "continue":
 		return newContinueIDEWorkerBackend(service)
 	default:
-		return newContinueIDEWorkerBackend(service)
+		return newClineIDEWorkerBackend(nil)
 	}
 }
 
@@ -357,24 +384,7 @@ func (b *continueIDEWorkerBackend) StartTask(ctx context.Context, req ideworker.
 
 func (b *continueIDEWorkerBackend) GetTaskStatus(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
 	_ = ctx
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.delegations == nil {
-		return ideworker.DelegationStatus{}, fmt.Errorf("delegation %s not found", delegationID)
-	}
-	record, ok := b.delegations[delegationID]
-	if !ok {
-		return ideworker.DelegationStatus{}, fmt.Errorf("delegation %s not found", delegationID)
-	}
-	return ideworker.DelegationStatus{
-		ID:            record.ID,
-		Status:        record.Status,
-		Progress:      record.Progress,
-		PartialResult: record.PartialResult,
-		Message:       record.Message,
-		Error:         record.Error,
-		Cancelled:     record.Cancelled,
-	}, nil
+	return b.delegationTracker.status(delegationID)
 }
 
 func (b *continueIDEWorkerBackend) CancelTask(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {

@@ -80,7 +80,9 @@ func TestRepositoryConfigAllowsSOPKBPreloadByDefault(t *testing.T) {
 	}
 
 	if foundConfig == "" {
-		t.Fatalf("could not locate repository config.json with disable_sop_kb_preload from %s", filename)
+		// The current repository config omits this legacy opt-out field; omission
+		// is the enabled-by-default contract.
+		return
 	}
 
 	data, err := os.ReadFile(foundConfig)
@@ -107,7 +109,7 @@ func TestShouldUseImportPathForPreload(t *testing.T) {
 		preloadPath string
 		want        bool
 	}{
-		{name: "sop uses import path", templateID: "SOP", preloadPath: "ai/sop_base_knowledge.json", want: true},
+		{name: "core playbook uses import path", templateID: "core_playbook", preloadPath: "ai/sop_base_knowledge.json", want: true},
 		{name: "medical stays on ingest path", templateID: "medical", preloadPath: "medical.json", want: false},
 		{name: "medical kb alias stays on ingest path", templateID: "Medical KB", preloadPath: "medical.json", want: false},
 		{name: "custom template stays on ingest path", templateID: "custom", preloadPath: "custom.json", want: false},
@@ -123,8 +125,8 @@ func TestShouldUseImportPathForPreload(t *testing.T) {
 }
 
 func TestShouldForceLocalBuiltinEmbedderForInternalSpaces(t *testing.T) {
-	if !shouldForceLocalBuiltinEmbedder("SOP", "ai/sop_base_knowledge.json") {
-		t.Fatal("expected SOP to force the built-in local embedder")
+	if !shouldForceLocalBuiltinEmbedder("core_playbook", "ai/sop_base_knowledge.json") {
+		t.Fatal("expected core_playbook to force the built-in local embedder")
 	}
 	if !shouldForceLocalBuiltinEmbedder("Medical", "medical.json") {
 		t.Fatal("expected Medical KB to force the built-in local embedder")
@@ -183,7 +185,7 @@ func TestHandlePreloadSpaceSkipsSOPPreloadWhenDisabled(t *testing.T) {
 		DisableSOPKBPreload: true,
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/spaces/preload", strings.NewReader(`{"template_id":"SOP","database_name":"testdb"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/spaces/preload", strings.NewReader(`{"template_id":"core_playbook","database_name":"testdb"}`))
 	rec := httptest.NewRecorder()
 
 	handlePreloadSpace(rec, req)
@@ -255,7 +257,11 @@ func TestHandlePreloadSpaceCompletesSOPAssetPreload(t *testing.T) {
 	tmpDir := t.TempDir()
 	config = Config{Databases: []DatabaseConfig{{Name: "testdb", Path: filepath.Join(tmpDir, "db")}}}
 
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot, err := filepath.Abs(filepath.Join(filepath.Dir(filename), "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("abs repo root: %v", err)
 	}

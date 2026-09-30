@@ -1523,7 +1523,7 @@ func TestBuildContinueBridgeEnvelope_PopulatesStructuredIDEContextVariables(t *t
 			OpenFiles    []string `json:"open_files"`
 			SelectedText string   `json:"selected_text"`
 		}{OpenFiles: []string{"payments/service.go", "payments/service_test.go"}, SelectedText: "func processPayment()"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1556,7 +1556,7 @@ func TestBuildContinueBridgeEnvelope_PreservesContinueToolMetadata(t *testing.T)
 			Type:     "function",
 			Function: continueChatToolFunction{Name: "multi_edit"},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1604,7 +1604,7 @@ func TestBuildContinueBridgeEnvelope_TrimsPromptOpenFilesButPreservesStructuredC
 			"docs/PAYMENTS.md",
 			"",
 		}},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1637,7 +1637,7 @@ func TestBuildContinueBridgeEnvelope_TrimsPromptSelectedTextButPreservesStructur
 			OpenFiles    []string `json:"open_files"`
 			SelectedText string   `json:"selected_text"`
 		}{SelectedText: selectedText},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1667,7 +1667,7 @@ func TestBuildContinueBridgeEnvelope_AddsCompactRoutingHintForNarrowSelectionReq
 			OpenFiles:    []string{"payments/service.go"},
 			SelectedText: "func processPayment() error { return nil }",
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1699,7 +1699,7 @@ func TestBuildContinueBridgeEnvelope_AddsDeliberateRoutingHintForComplexRequests
 		}{
 			OpenFiles: []string{"payments/service.go", "payments/service_test.go", "payments/retry.go", "payments/worker.go"},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1732,7 +1732,7 @@ func TestBuildContinueBridgeEnvelope_PropagatesHQSessionContext(t *testing.T) {
 			UserID    string `json:"user_id,omitempty"`
 			SessionID string `json:"session_id,omitempty"`
 		}{BaseURL: "https://northstar.example.com", UserID: "user-42", SessionID: "hq-session-42"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
 	}
@@ -1934,17 +1934,25 @@ func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
 	oldCfg := sopbackend.GetConfig()
 	defer sopbackend.SetConfig(oldCfg)
 
-	t.Run("continue default", func(t *testing.T) {
+	t.Run("cline default", func(t *testing.T) {
+		sopbackend.SetConfig(sopbackend.Config{})
+		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		if _, ok := backend.(*clineWorkerBackend); !ok {
+			t.Fatalf("expected cline workflow backend, got %T", backend)
+		}
+	})
+
+	t.Run("continue reference override", func(t *testing.T) {
 		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
-		backend := newDefaultIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
 		if _, ok := backend.(*continueIDEWorkerBackend); !ok {
-			t.Fatalf("expected continue workflow backend, got %T", backend)
+			t.Fatalf("expected continue reference backend, got %T", backend)
 		}
 	})
 
 	t.Run("daemon override", func(t *testing.T) {
 		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "daemon"})
-		backend := newDefaultIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
 		if _, ok := backend.(daemonShellIDEWorkerBackend); !ok {
 			t.Fatalf("expected daemon workflow backend, got %T", backend)
 		}
@@ -1976,7 +1984,7 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
 	defer sopbackend.SetConfig(oldCfg)
 
-	backend := newDefaultIDEWorkerBackend(service)
+	backend := newConfiguredIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
 		RequestID:      "client-request-default-1",
 		SessionID:      "continue-worker-default",
@@ -2024,7 +2032,7 @@ func TestDefaultIDEWorkerBackend_InspectSessionFallsBackToDaemonShell(t *testing
 	defer sopbackend.SetConfig(oldCfg)
 
 	service := &localRAGService{service: &recordingQueryAgent{}, shellSessions: mgr}
-	backend := newDefaultIDEWorkerBackend(service)
+	backend := newConfiguredIDEWorkerBackend(service)
 	state, err := backend.InspectSession(context.Background(), "daemon-shell-worker")
 	if err != nil {
 		t.Fatalf("InspectSession failed: %v", err)

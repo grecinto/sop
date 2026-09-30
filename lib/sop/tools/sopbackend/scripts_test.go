@@ -154,7 +154,7 @@ func TestHandleExecuteScript(t *testing.T) {
 }
 
 func TestSpaceItemCardsRenderLifecycleBadges(t *testing.T) {
-	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	templatePath := templatePath("scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)
@@ -170,7 +170,7 @@ func TestSpaceItemCardsRenderLifecycleBadges(t *testing.T) {
 }
 
 func TestCategoryLifecycleActionsRemainSimple(t *testing.T) {
-	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	templatePath := templatePath("scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)
@@ -190,8 +190,8 @@ func TestLifecycleStateIsDisplayedWithoutManualControls(t *testing.T) {
 		path   string
 		needle string
 	}{
-		{path: filepath.Join(".", "templates", "modals.html"), needle: "Lifecycle state"},
-		{path: filepath.Join(".", "templates", "scripts_part01.html"), needle: "lifecycle_status"},
+		{path: templatePath("modals.html"), needle: "Lifecycle state"},
+		{path: templatePath("scripts_part01.html"), needle: "lifecycle_status"},
 	} {
 		content, err := os.ReadFile(tc.path)
 		if err != nil {
@@ -209,8 +209,8 @@ func TestLifecycleOverrideInputsAreNotRendered(t *testing.T) {
 		path   string
 		needle string
 	}{
-		{path: filepath.Join(".", "templates", "modals.html"), needle: "new-space-item-lifecycle-status"},
-		{path: filepath.Join(".", "templates", "scripts_part01.html"), needle: "inline-item-lifecycle-status"},
+		{path: templatePath("modals.html"), needle: "new-space-item-lifecycle-status"},
+		{path: templatePath("scripts_part01.html"), needle: "inline-item-lifecycle-status"},
 	} {
 		content, err := os.ReadFile(tc.path)
 		if err != nil {
@@ -224,7 +224,7 @@ func TestLifecycleOverrideInputsAreNotRendered(t *testing.T) {
 }
 
 func TestCategoryTreeRendersLifecycleCue(t *testing.T) {
-	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	templatePath := templatePath("scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)
@@ -240,7 +240,7 @@ func TestCategoryTreeRendersLifecycleCue(t *testing.T) {
 }
 
 func TestItemCardsRenderLifecycleFieldsWithSafeFallbacks(t *testing.T) {
-	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	templatePath := templatePath("scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)
@@ -253,7 +253,7 @@ func TestItemCardsRenderLifecycleFieldsWithSafeFallbacks(t *testing.T) {
 }
 
 func TestSourceLinkPopupTemplateUsesEscapedAttributes(t *testing.T) {
-	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	templatePath := templatePath("scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)

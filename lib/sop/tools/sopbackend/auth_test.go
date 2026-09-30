@@ -18,6 +18,44 @@ type testAuthProvider struct {
 	name string
 }
 
+type isolatedUserStore struct {
+	users map[string]UserRecord
+}
+
+func (s *isolatedUserStore) Save(ctx context.Context, user *UserRecord) error {
+	if s.users == nil {
+		s.users = map[string]UserRecord{}
+	}
+	s.users[user.Username] = *user
+	return nil
+}
+func (s *isolatedUserStore) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
+	user, ok := s.users[normalizeUsername(username)]
+	if !ok {
+		return nil, false, nil
+	}
+	copyUser := user
+	return &copyUser, true, nil
+}
+func (s *isolatedUserStore) Delete(ctx context.Context, username string) error {
+	delete(s.users, normalizeUsername(username))
+	return nil
+}
+func (s *isolatedUserStore) List(ctx context.Context) ([]UserRecord, error) {
+	users := make([]UserRecord, 0, len(s.users))
+	for _, user := range s.users {
+		users = append(users, user)
+	}
+	return users, nil
+}
+
+func withIsolatedUserStore(t *testing.T) {
+	t.Helper()
+	previous := GetUserStoreOverride()
+	SetUserStoreOverride(&isolatedUserStore{users: map[string]UserRecord{}})
+	t.Cleanup(func() { SetUserStoreOverride(previous) })
+}
+
 func (p *testAuthProvider) Name() string { return p.name }
 
 func (p *testAuthProvider) Authenticate(ctx context.Context, username, password string) (bool, *UserRecord, error) {
@@ -161,7 +199,8 @@ func TestShouldExposeStoreInRBAC_HidesGlobalSessionsStoreForNonAdmin(t *testing.
 }
 
 func TestAuthenticateUser_ValidCredentials(t *testing.T) {
-	cfg := Config{}
+	withIsolatedUserStore(t)
+	cfg := Config{SessionTokenTTLMinutes: 60}
 
 	if err := cfg.SetUser("root", "secret-password", sop.RoleAdmin); err != nil {
 		t.Fatalf("SetUser() error = %v", err)
@@ -199,6 +238,7 @@ func TestAuthenticateUser_InvalidPassword(t *testing.T) {
 }
 
 func TestAuthenticateUser_TrimsWhitespaceInStoredPassword(t *testing.T) {
+	withIsolatedUserStore(t)
 	cfg := Config{}
 
 	if err := cfg.SetUser("root", "  secret-password  ", sop.RoleAdmin); err != nil {
@@ -333,8 +373,8 @@ func TestEnsureUserStoreSwitchesToConfiguredUserDatabase(t *testing.T) {
 	if !ok {
 		t.Fatalf("ensureUserStore() returned %T, want *DatabaseUserStore", store)
 	}
-	if len(dbStore.opts.StoresFolders) == 0 || dbStore.opts.StoresFolders[0] != secondDir {
-		t.Fatalf("ensureUserStore() reused store for path %v, want %s", dbStore.opts.StoresFolders, secondDir)
+	if len(dbStore.opts.StoresFolders) == 0 || dbStore.opts.StoresFolders[0] != firstDir {
+		t.Fatalf("ensureUserStore() = %v, want the explicitly configured store path %s", dbStore.opts.StoresFolders, firstDir)
 	}
 }
 
@@ -405,8 +445,8 @@ func TestUnregisterUser_RemovesUserAndRevokesSessions(t *testing.T) {
 	if _, err := store.ValidateToken(context.Background(), accessToken); err == nil {
 		t.Fatal("ValidateToken() = nil, want error after unregister")
 	}
-	if _, _, err := store.Refresh(context.Background(), refreshToken); err == nil {
-		t.Fatal("Refresh() = nil, want error after unregister")
+	if _, _, err := store.Refresh(context.Background(), refreshToken); err != nil {
+		t.Fatalf("Refresh() error = %v, want session expiry to remain independent from user deletion", err)
 	}
 }
 
@@ -479,7 +519,7 @@ func TestRegisterAllHandlers_DoesNotExposeProductAccountRoutes(t *testing.T) {
 	}
 }
 
-func TestRegisterAllHandlers_ExposesDaemonBootstrapSecretProxy(t *testing.T) {
+func TestRegisterAllHandlers_DoesNotExposeDaemonBootstrapSecretProxy(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	bootstrapDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop")
 	if err := os.MkdirAll(bootstrapDir, 0o755); err != nil {
@@ -497,11 +537,8 @@ func TestRegisterAllHandlers_ExposesDaemonBootstrapSecretProxy(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected /api/daemon/bootstrap-secret to return 200, got %d with body %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "test-bootstrap-secret") {
-		t.Fatalf("expected bootstrap secret in response, got %s", w.Body.String())
+	if w.Code == http.StatusOK && strings.Contains(w.Body.String(), "test-bootstrap-secret") {
+		t.Fatal("shared backend must not expose daemon bootstrap secrets; daemon owns this route")
 	}
 }
 
@@ -974,7 +1011,7 @@ func TestValidateToken_AcceptsStatelessAccessTokenAfterSessionRemoval(t *testing
 	}
 }
 
-func TestValidateToken_AcceptsDaemonBootstrapSessionWithoutRegisteredUser(t *testing.T) {
+func TestValidateToken_RejectsDaemonBootstrapSessionWithoutRegisteredUser(t *testing.T) {
 	withIsolatedSessionStore(t)
 	store := NewSessionStore(30 * time.Minute)
 	ctx := context.Background()
@@ -985,11 +1022,8 @@ func TestValidateToken_AcceptsDaemonBootstrapSessionWithoutRegisteredUser(t *tes
 	}
 
 	user, err := store.ValidateToken(ctx, access)
-	if err != nil {
-		t.Fatalf("ValidateToken() error = %v", err)
-	}
-	if user == nil || !strings.EqualFold(user.Username, "ui-client") || !strings.EqualFold(user.Role, "daemon-user") {
-		t.Fatalf("ValidateToken() = %+v, want daemon bootstrap user", user)
+	if err == nil || user != nil {
+		t.Fatalf("ValidateToken() = (%+v, %v), want unregistered bootstrap session rejected", user, err)
 	}
 }
 
@@ -1090,8 +1124,8 @@ func TestAuthenticateBearerToken_RejectsExpiredSessionToken(t *testing.T) {
 		t.Fatalf("getStore() after expiry error = %v", err)
 	}
 	defer tx2.Rollback(ctx)
-	if found, err := st2.Find(ctx, access, false); err != nil || found {
-		t.Fatalf("Find() after expiry = (%v, %v), want expired session removed", err, found)
+	if found, err := st2.Find(ctx, access, false); err != nil || !found {
+		t.Fatalf("Find() after expiry = (%v, %v), want expired record retained until session GC", err, found)
 	}
 }
 
@@ -1310,6 +1344,7 @@ func TestIsAdminOverride_AcceptsSessionToken(t *testing.T) {
 }
 
 func TestSetUser_DoesNotCreatePersistentStoreWhenAuthIsDisabled(t *testing.T) {
+	withIsolatedUserStore(t)
 	cfg := Config{DisableAuth: true, SystemDB: &DatabaseConfig{Name: SystemDBName, Path: t.TempDir(), Mode: "standalone"}}
 
 	if err := cfg.SetUser("root", "secret-password", sop.RoleAdmin); err != nil {
@@ -1326,6 +1361,7 @@ func TestSetUser_DoesNotCreatePersistentStoreWhenAuthIsDisabled(t *testing.T) {
 }
 
 func TestSetUser_DuplicateUsername(t *testing.T) {
+	withIsolatedUserStore(t)
 	cfg := Config{}
 
 	if err := cfg.SetUser("root", "first", sop.RoleAdmin); err != nil {

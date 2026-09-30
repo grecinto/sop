@@ -1,0 +1,19 @@
+{
+  "name": "@sop/cline-sdk-host",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/host.js"
+  },
+  "dependencies": {
+    "@cline/core": "0.0.87"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

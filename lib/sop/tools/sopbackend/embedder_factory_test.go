@@ -14,10 +14,10 @@ func TestShouldForceLocalBuiltinEmbedder(t *testing.T) {
 		preloadPath string
 		want        bool
 	}{
-		{name: "sop preload uses local override", spaceName: "SOP", preloadPath: "ai/sop_base_knowledge.json", want: true},
+		{name: "core playbook preload uses local override", spaceName: "core_playbook", preloadPath: "ai/sop_base_knowledge.json", want: true},
 		{name: "medical preload uses local override", spaceName: "medical", preloadPath: "medical.json", want: true},
-		{name: "custom preload path does not override", spaceName: "SOP", preloadPath: "custom.json", want: false},
-		{name: "empty preload path still uses local override for built-in SOP space", spaceName: "SOP KB", preloadPath: "", want: true},
+		{name: "custom preload path does not override", spaceName: "core_playbook", preloadPath: "custom.json", want: false},
+		{name: "empty preload path does not infer retired SOP alias", spaceName: "SOP KB", preloadPath: "", want: false},
 		{name: "empty preload path still uses local override for built-in medical space", spaceName: "Medical", preloadPath: "", want: true},
 		{name: "custom space keeps default path", spaceName: "customer-space", preloadPath: "custom.json", want: false},
 	}
@@ -47,13 +47,13 @@ func TestGetConfiguredEmbedderForSpaceUsesRealEmbedderForBuiltinSpaces(t *testin
 	config = Config{ProductionMode: false}
 	defer func() { config = oldCfg }()
 
-	embedder := GetConfiguredEmbedderForSpace(nil, "SOP", "")
+	embedder := GetConfiguredEmbedderForSpace(nil, "core_playbook", "")
 	if embedder == nil {
 		t.Fatal("expected a built-in embedder instance, got nil")
 	}
 
 	if _, ok := embedder.(*embed.Simple); ok {
-		t.Fatal("expected built-in SOP vectorization to bypass the mock embedder fallback")
+		t.Fatal("expected built-in core_playbook vectorization to bypass the mock embedder fallback")
 	}
 }
 

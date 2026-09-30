@@ -10,9 +10,9 @@ import (
 )
 
 func TestEmbedderOptionsTemplateUsesCatalogEntriesWithoutPlaceholder(t *testing.T) {
-	templatePath := filepath.Join("templates", "options.html")
-	fsys := os.DirFS(".")
-	tmpl, err := template.ParseFS(fsys, templatePath)
+	templateFile := templatePath("options.html")
+	fsys := os.DirFS(filepath.Dir(templateFile))
+	tmpl, err := template.ParseFS(fsys, filepath.Base(templateFile))
 	if err != nil {
 		t.Fatalf("parse embedder options template: %v", err)
 	}
@@ -44,9 +44,9 @@ func TestEmbedderOptionsTemplateUsesCatalogEntriesWithoutPlaceholder(t *testing.
 }
 
 func TestAIWindowEmbedderToggleHidesButtonForEmbeddedLocalEmbedders(t *testing.T) {
-	templatePath := filepath.Join("templates", "scripts_part11.html")
-	fsys := os.DirFS(".")
-	tmpl, err := template.ParseFS(fsys, templatePath)
+	templateFile := templatePath("scripts_part11.html")
+	fsys := os.DirFS(filepath.Dir(templateFile))
+	tmpl, err := template.ParseFS(fsys, filepath.Base(templateFile))
 	if err != nil {
 		t.Fatalf("parse setup wizard script template: %v", err)
 	}
@@ -66,9 +66,9 @@ func TestAIWindowEmbedderToggleHidesButtonForEmbeddedLocalEmbedders(t *testing.T
 }
 
 func TestEmbedderOptionsTemplateRendersActualCatalog(t *testing.T) {
-	templatePath := filepath.Join("templates", "options.html")
-	fsys := os.DirFS(".")
-	tmpl, err := template.ParseFS(fsys, templatePath)
+	templateFile := templatePath("options.html")
+	fsys := os.DirFS(filepath.Dir(templateFile))
+	tmpl, err := template.ParseFS(fsys, filepath.Base(templateFile))
 	if err != nil {
 		t.Fatalf("parse embedder options template: %v", err)
 	}

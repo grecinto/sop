@@ -74,7 +74,7 @@ func TestSpaceListUsesGlobalLabelForInternalMemorySpace(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dbName := "testdb_global_memory_label"
-	spaceName := "testuser_ltm"
+	spaceName := "memory_testuser"
 
 	config = Config{
 		Databases: []DatabaseConfig{{Name: dbName, Path: tmpDir, Mode: "standalone"}},
@@ -92,7 +92,8 @@ func TestSpaceListUsesGlobalLabelForInternalMemorySpace(t *testing.T) {
 		t.Fatalf("create space status = %d, body = %s", createRR.Code, createRR.Body.String())
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/spaces?database="+dbName, nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/spaces?database="+dbName+"&user_id=testuser", nil)
+	listReq = listReq.WithContext(sop.ContextWithAuth(listReq.Context(), sop.AuthContext{UserID: "testuser", Roles: []string{sop.RoleUser}}))
 	listRR := httptest.NewRecorder()
 	handleListSpaces(listRR, listReq)
 	if listRR.Code != http.StatusOK {
@@ -117,7 +118,7 @@ func TestSpaceConfigAndListExposeDisplayName(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dbName := "testdb_display_name"
-	spaceName := "ltm_testuser"
+	spaceName := "core_playbook"
 
 	config = Config{
 		Databases: []DatabaseConfig{{Name: dbName, Path: tmpDir, Mode: "standalone"}},
@@ -157,7 +158,8 @@ func TestSpaceConfigAndListExposeDisplayName(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/spaces?database="+dbName, nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/spaces?database="+dbName+"&user_id=testuser", nil)
+	listReq = listReq.WithContext(sop.ContextWithAuth(listReq.Context(), sop.AuthContext{UserID: "testuser", Roles: []string{sop.RoleUser}}))
 	listRR := httptest.NewRecorder()
 	handleListSpaces(listRR, listReq)
 	if listRR.Code != http.StatusOK {
@@ -182,8 +184,8 @@ func TestSpaceConfigAndListExposeDisplayName(t *testing.T) {
 	if !found {
 		t.Fatalf("expected space %q in response data, got %#v", spaceName, listResp.Data)
 	}
-	if got := listResp.DisplayNames[spaceName]; got != "memory" {
-		t.Fatalf("display_names[%q] = %q, want %q", spaceName, got, "memory")
+	if got := listResp.DisplayNames[spaceName]; got != "Core Playbook" {
+		t.Fatalf("display_names[%q] = %q, want %q", spaceName, got, "Core Playbook")
 	}
 
 	if _, err := filepath.Abs(tmpDir); err != nil {
@@ -197,7 +199,7 @@ func TestListSpacesMarksInternalSOPAsNonAISelectable(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dbName := "testdb_internal_sop_rbac"
-	spaceName := "SOP"
+	spaceName := "core_playbook"
 
 	config = Config{
 		Databases: []DatabaseConfig{{Name: dbName, Path: tmpDir, Mode: "standalone"}},

@@ -373,7 +373,7 @@ func TestDaemonProvisioningSystemStoresFoldersDefaultsToSystemDataPath(t *testin
 		t.Fatalf("read template: %v", err)
 	}
 	indexContent := string(indexData)
-	want := `id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/system" style="flex: 1;"`
+	want := `id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/{{.SystemDBName}}" style="flex: 1;"`
 	if !strings.Contains(indexContent, want) {
 		t.Fatalf("expected daemon provisioning system stores field to default to the system data path in %s", indexPath)
 	}
@@ -386,7 +386,7 @@ func TestDaemonProvisioningSimpleSystemDatabasePathDefaultsToSystemFolder(t *tes
 		t.Fatalf("read template: %v", err)
 	}
 	indexContent := string(indexData)
-	want := `id="setup-reg-path" placeholder="/var/lib/sop/system_db" value="./.sop-data/system" style="width: 100%; box-sizing: border-box;">`
+	want := `id="setup-reg-path" placeholder="/var/lib/sop/system_db" value="./.sop-data/{{.SystemDBName}}" style="width: 100%; box-sizing: border-box;">`
 	if !strings.Contains(indexContent, want) {
 		t.Fatalf("expected daemon provisioning simple system database path to default to a system path in %s", indexPath)
 	}
@@ -441,7 +441,7 @@ func TestSpaceItemCardRendererSupportsWorkflowStepCards(t *testing.T) {
 		t.Fatalf("read template: %v", err)
 	}
 	scriptsContent := string(scriptsData)
-	for _, token := range []string{"workflow-step-card", "workflow-card", "renderWorkflowCardHtml"} {
+	for _, token := range []string{"workflow-step-details", "new-space-item-workflow-section", "renderWorkflowDefinitionPreview"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow card renderer token %s in %s", token, scriptsPath)
 		}
@@ -455,8 +455,8 @@ func TestWorkflowStudioModalAndRendererAreDefinedInTemplates(t *testing.T) {
 		t.Fatalf("read modal template: %v", err)
 	}
 	modalsContent := string(modalsData)
-	if !strings.Contains(modalsContent, "workflow-studio-modal") {
-		t.Fatalf("expected workflow studio modal container in %s", modalsPath)
+	if !strings.Contains(modalsContent, "new-space-item-workflow-section") {
+		t.Fatalf("expected current workflow editor container in %s", modalsPath)
 	}
 
 	scriptsPath := templatePath("scripts_part01.html")
@@ -465,7 +465,7 @@ func TestWorkflowStudioModalAndRendererAreDefinedInTemplates(t *testing.T) {
 		t.Fatalf("read template: %v", err)
 	}
 	scriptsContent := string(scriptsData)
-	for _, token := range []string{"renderWorkflowStudioModal", "openWorkflowStudioModal", "workflow-studio-open-btn"} {
+	for _, token := range []string{"renderWorkflowDefinitionPreview", "new-space-item-workflow-steps", "saveSpaceItem"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow studio renderer token %s in %s", token, scriptsPath)
 		}
@@ -479,7 +479,7 @@ func TestWorkflowStudioEditorExposesEditableActions(t *testing.T) {
 		t.Fatalf("read template: %v", err)
 	}
 	scriptsContent := string(scriptsData)
-	for _, token := range []string{"workflow-studio-save-btn", "workflow-studio-add-step-btn", "workflow-studio-step-list"} {
+	for _, token := range []string{"new-space-item-workflow-name", "new-space-item-workflow-description", "new-space-item-workflow-preview"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow studio editor token %s in %s", token, scriptsPath)
 		}
@@ -493,7 +493,7 @@ func TestWorkflowStudioEditorExposesStepManagementControls(t *testing.T) {
 		t.Fatalf("read template: %v", err)
 	}
 	scriptsContent := string(scriptsData)
-	for _, token := range []string{"workflow-studio-step-number", "workflow-studio-delete-step-btn", "workflow-studio-move-step-up-btn", "workflow-studio-move-step-down-btn"} {
+	for _, token := range []string{"new-space-item-workflow-steps", "new-space-item-workflow-step-metadata", "renderWorkflowDefinitionPreview"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow studio step management token %s in %s", token, scriptsPath)
 		}

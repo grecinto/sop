@@ -95,7 +95,7 @@ func TestKBRefinementHandlersRejectInvalidRequests(t *testing.T) {
 }
 
 func TestKBChatTemplateIncludesRefinementControls(t *testing.T) {
-	path := filepath.Join("templates", "scripts_kb_chat.html")
+	path := templatePath("scripts_kb_chat.html")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read chat template: %v", err)
