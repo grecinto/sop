@@ -37,7 +37,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'sdk/intro',
         'sdk/history',
-        'sdk/continue-facade-architecture',
+        'sdk/ide-copilot-backend',
         'sdk/ask-participant-mode',
         'sdk/workflow-architecture',
         'sdk/vector-database',

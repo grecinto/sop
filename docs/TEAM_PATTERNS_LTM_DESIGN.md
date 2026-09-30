@@ -164,9 +164,8 @@ Raw `jwt.Parse()` bypasses all of these security layers.
 - Session Management
 
 ## References
-- Implementation: [lib/auth/jwt.go:45](lib/auth/jwt.go#L45)
-- Example: [examples/api/handlers.go:23](examples/api/handlers.go#L23)
-- Tests: [lib/auth/jwt_test.go:67](lib/auth/jwt_test.go#L67)
+- [TEAM_PATTERNS_IMPLEMENTATION_SUMMARY.md](TEAM_PATTERNS_IMPLEMENTATION_SUMMARY.md) - Implemented integration snapshot
+- [LONG_TERM_MEMORY.md](LONG_TERM_MEMORY.md) - Current memory lifecycle and category behavior
 
 **Status**: active  
 **Created**: 2026-07-15  

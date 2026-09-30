@@ -177,5 +177,5 @@ func ExecuteTool(ctx context.Context, workstream *WorkStreamContext, queue *Work
 
 **Documentation**:
 - [AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md](./AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md) - Full bug history
-- [DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md](./DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md) - Phase system overview
+- [PHASE_SYSTEM_ARCHITECTURE.md](./PHASE_SYSTEM_ARCHITECTURE.md) - Phase system overview
 - [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](./CLI_CODING_WORKFLOW_IMPLEMENTATION.md) - Coding workflow details

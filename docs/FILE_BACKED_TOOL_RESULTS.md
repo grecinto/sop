@@ -306,20 +306,11 @@ Owning Engine Exit → Cleanup() removes temp directory
 
 ---
 
-## Compatibility With Continue Token Optimization
+## Bounded Delegated Results
 
-This design is compatible with the Continue token-optimization work because the two mechanisms operate at different seams:
+File-backed results complement bounded context assembly for any delegated backend, including the default Cline SDK backend. Context selection limits what enters a turn; file-backed tool results limit large command, test, and build output returned by tools. Together they reduce repeated prompt growth across Ask/ReAct iterations without relying on IDE-specific optimization behavior.
 
-- Continue token optimization trims and normalizes request context before Ask prompt assembly.
-- File-backed tool results bound tool output after execution, before those outputs can bloat subsequent reasoning turns.
-
-They reinforce each other in practice:
-
-- The Continue bridge reduces initial prompt cost using selected text, trimmed open-file context, model tiering, and prompt-order discipline.
-- File-backed wrapping prevents large command, test, and build outputs from giving those savings back on follow-up turns.
-- Continue delegation already prefers compact diffs and artifact references, which matches the same "avoid large inline payloads" goal.
-
-The main caveat is documentation drift: threshold values and wrapping semantics should be treated as runtime contracts owned by `tool_result_storage.go` and its tests, not as fixed assumptions in older design notes.
+Thresholds and wrapping semantics are runtime contracts owned by `tool_result_storage.go` and its tests. Provider/backend adapters should return compact summaries and artifact references where possible rather than duplicating this storage policy.
 ```
 
 ---

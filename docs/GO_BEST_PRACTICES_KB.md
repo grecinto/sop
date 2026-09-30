@@ -141,7 +141,7 @@ This KB is part of a broader effort to make expertise **enforced** rather than j
 
 **Current limitation**: The KB provides patterns, but there's no validation that generated code actually follows them.
 
-**Planned improvements** (see [KB_EXPERTISE_QUALITY_IMPROVEMENT.md](KB_EXPERTISE_QUALITY_IMPROVEMENT.md)):
+**Planned improvements** (see [KB_EXPERTISE_QUALITY_IMPROVEMENT.md](KB_QUALITY.md)):
 - Post-generation validator that checks code against these patterns
 - Automatic revision loop when violations are detected
 - Inline citations showing which pattern was applied

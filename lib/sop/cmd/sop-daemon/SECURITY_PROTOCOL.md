@@ -1,5 +1,13 @@
 # HQ/Host RAG Security Protocol Proposal
 
+> **Status:** Mixed historical proposal and implemented protocol notes. The early
+> “simplified stateless daemon” alternative and its recommendation to remove
+> daemon authentication were not adopted. The current daemon uses bootstrap
+> challenge-response to issue JWT access/refresh tokens, protects API routes,
+> and binds to loopback by default. See `docs/AUTHENTICATION.md` and
+> `lib/sop/DAEMON_AUTH_USAGE.md` for maintained guidance; use this file's
+> Bootstrap JWT sections only as implementation reference.
+
 ## Goal
 
 Support signed-token enforcement for both HQ and the local RAG runtime, while preserving offline operation when HQ is unreachable.
@@ -1065,22 +1073,23 @@ SOP's bootstrap rotation provides **superior security** compared to industry-sta
 
 | Feature | Daemon (Local) | HQ (Remote) | UI (Bridge) |
 |---------|---------------|-------------|-------------|
-| Authentication | None | JWT tokens | Manages tokens |
-| User data | Local files only | All user data | Fetches & displays |
-| RAG/LLM | Local models | Cloud models | Routes queries |
-| Shell execution | Yes (local) | No | Displays output |
-| Network access | Localhost only | Internet | Both |
-| Persistence | Local filesystem | Database | Cache only |
-| Rate limiting | Optional | Required | Enforces HQ limits |
+| Authentication | Bootstrap challenge plus daemon-issued JWT access/refresh tokens | Hosted account/session auth | Stores and sends daemon tokens |
+| Workspace execution | Local workspace and isolated daemon workers | No direct local workspace access | Sends bounded API requests |
+| RAG/LLM | Runs Ask with configured provider/model credentials | Hosted services where configured | Presents the Data Manager UI |
+| Network access | Loopback listener by default; optional configured HQ sync | Hosted endpoints | Calls configured runtime |
+| Persistence | Local stores and persisted workstream memory; transient state remains process-scoped | Hosted database | Browser settings and UI state |
+| Rate limiting | Daemon-local request limits | Hosted limits | Sends requests; does not replace server enforcement |
 
 ### Recommended Implementation
 
-1. **Remove all token handling from daemon** - No `Auth` struct, no token validation
-2. **Restrict CORS to localhost** - Replace `Access-Control-Allow-Origin: *` with localhost check
-3. **Bind to 127.0.0.1 only** - Not `0.0.0.0` or public IPs
-4. **UI handles all HQ API calls** - Daemon never makes external requests
-5. **Keep daemon stateless** - In-memory session store is fine, lost on restart is OK
-6. **UI re-initializes daemon context** - Send necessary context with each request batch
+The preceding stateless/no-daemon-auth advice is historical and must not be followed for the current runtime. Current implementation requirements are:
+
+1. Keep the daemon bound to loopback by default; remote exposure requires an explicit deployment/security design.
+2. Use the bootstrap challenge-response and daemon JWT lifecycle for protected APIs.
+3. Preserve bearer validation, route authorization, and rate limits in the daemon.
+4. Keep local workspace work in the daemon; remote model-provider requests may still transmit prompts to that provider.
+5. Persist workstream state through the STM persistence/rehydration path; do not confuse it with process-scoped auth/cache state.
+6. Keep HQ synchronization optional and driven by configured HQ connectivity.
 
 This architecture is simpler, more secure, and aligns with the "local daemon" design intent.
 

@@ -48,7 +48,7 @@ cd /Volumes/T7/sop-cloud/lib/sop/cmd/sop-daemon
 
 ### Quick Start
 - **Resume Document**: `docs/RESUME_2026_08_31.md` (complete session summary)
-- **Test Guide**: `docs/PHASE_AWARE_TESTING_SUMMARY.md` (how to validate)
+- **Test Guide**: `docs/PHASE_AWARE_CONTEXT_OPTIMIZATION.md` (historical implementation notes; verify current tests in source)
 - **Test Script**: `test_phase_aware_optimization.sh` (automated testing)
 
 ### Implementation

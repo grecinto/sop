@@ -1,167 +1,70 @@
 # Development Guide
 
-This document is the short orientation guide for future developers and maintainers of this repository.
+This guide describes the current repository layout and the quickest checks for changes in each runtime.
 
-## Repository shape
+## Repository Layout
 
-This repo is a private overlay on top of the shared SOP implementation.
+- `src/backend/site` and `src/backend/siteapi`: standalone site host and product-facing routes.
+- `src/backend/siteaccount`: site account and billing data/services.
+- `src/frontend`: React site frontend; it is not the Data Manager UI.
+- `lib/sop`: shared SOP runtime, Data Manager templates, HTTP server, daemon, AI/Ask pipeline, memory, and storage.
+- `tools/cline-sdk-host`: Node/TypeScript bridge to the Cline SDK.
+- `docs`: current architecture/operations guides and dated implementation references.
 
-- [lib/sop](../lib/sop): the mature SOP platform code. This includes the existing AI Studio, shared runtime, and daemon-oriented capabilities.
-- [src](../src): the product-facing sop-cloud application layer. Use this tree for site-specific UX, registration flows, onboarding, subscriptions, and account management.
-- [docs](.) and the repository root: product stories, implementation notes, and repository-level guidance.
+The repository is a Go workspace. Keep product/site behavior in `src`; put behavior in `lib/sop` only when it is reusable by the shared runtime.
 
-## Two runtime tracks
+## Runtime Boundaries
 
-There are two distinct experiences in this repository:
+- The React site and site backend handle public product pages, account flows, subscriptions, and onboarding.
+- The Data Manager is served by the shared `httpserver` or daemon using `sopbackend` templates and handlers.
+- The daemon provides local workspace, API, and PTY worker capabilities.
+- Normal Data Manager Chat goes through `/api/ask`. SOP Ask/ReAct owns classification and orchestration; the configured Cline SDK backend executes bounded coding work when Ask delegates.
+- Continue remains reference/compatibility code, not a shipping dependency.
 
-- The platform is intended to behave as a first-class microservice surface. Developers should think in terms of capabilities and APIs first, and storage backend choice second.
-- The mature HTTP server and daemon should expose stable functionality over HTTP so other services and third-party integrations can consume the same capabilities without depending on one storage engine.
+See [AI Studio](AI_STUDIO.md), [Ask architecture](ASK_V2_ARCHITECTURE.md), [Cline integration](CLINE_COPILOT_INTEGRATION_PLAN.md), and the [IDE backend contract](IDE_COPILOT_BACKEND_SDK.md).
 
-1. The mature platform experience
-   - Lives in [lib/sop](../lib/sop)
-   - Includes the original AI Studio and the shared runtime/daemon workflow
-   - Should remain the stable platform layer for core runtime behavior
+## Authentication and State
 
-2. The new sop-cloud product experience
-   - Lives in [src](../src)
-   - Includes the new site backend and planned frontend experience
-   - Holds self-registration, onboarding, account management, and subscription logic
-   - Treat register, unregister, and subscription updates as site/product-facing flows rather than core AI Studio or daemon endpoints
+The shared `sopbackend` layer owns token/session validation and auth context. `siteaccount` owns product account and billing data and coordinates site-facing account flows. Do not add parallel token validation or assume billing fields live in the SOP auth user record.
 
-## Maintenance rules
+Prefer explicit request structs and function parameters for domain state. Use `context.Context` for cancellation, deadlines, and request-scoped infrastructure values, not as an application state bag. Preserve caller contexts through daemon and worker code.
 
-Keep the boundary clear:
+See [AUTHENTICATION.md](AUTHENTICATION.md), [ENTITLEMENT_ARCHITECTURE.md](ENTITLEMENT_ARCHITECTURE.md), and [PAYMENTS.md](PAYMENTS.md).
 
-- Put shared runtime behavior in [lib/sop](../lib/sop)
-- Put product-specific behavior in [src](../src)
-- Avoid mixing the new site experience into the mature platform code unless the change is genuinely reusable by the wider runtime
-- When adding a feature, describe it in terms of the user-facing or integration-facing capability it provides, not in terms of which storage engine happens to back it today
-- If the topic is SOP DB internals, keep that discussion in the relevant storage/runtime package documentation rather than in the product-facing layer
-- Swagger/OpenAPI docs are available through the shared backend wiring for both the HTTP server and daemon at /swagger.json and /swagger/.
-- Observability for the product site, shared backend, onboarding flow, auth, and subscriptions is tracked in [OBSERVABILITY_PLAN.md](OBSERVABILITY_PLAN.md).
-- Shared monitorability endpoints should follow the Prometheus-compatible contract described in [OBSERVABILITY_PLAN.md](OBSERVABILITY_PLAN.md): /healthz for health and /metrics for scrapeable metrics.
-- For the new site and shared backend, do not use context.Context as a general-purpose state bucket for request values or domain state. Prefer explicit parameters or explicit request structs in handlers, service methods, and API boundaries.
-- LTM lifecycle maintenance should follow the documented policy: use a nightly wakeup servicer for cleanup and retention decisions, run a weekly compaction pass for archive/merge/prune work, and keep active-usage bookkeeping lightweight by updating recency metadata inline during retrieval and write flows.
-- The current retention behavior is conservative: a memory item stays active while it is recent and relevant, becomes archived once it is deemed stale, and is removed from the store once the weekly compaction pass observes it has been archived long enough.
-- In the Data Manager, lifecycle state is now surfaced directly on space-item cards so archived or stale entries are visibly labeled and can be distinguished from active content without opening the item details.
+## Build and Test
 
-## Space and Store Naming
+Run from the repository root:
 
-**Important**: Space and Store names are automatically normalized to ensure backend compatibility:
-
-- **User input**: `"My Space"` → **Stored as**: `"my_space"` → **Displayed as**: `"My Space"`
-- Spaces converted to underscores, lowercased
-- Only `[a-zA-Z0-9_-]` characters allowed
-- Display names auto-generated from stored names (underscores → spaces, title case)
-
-**When writing code:**
-- Always reference Spaces/Stores using their normalized (stored) names: `"core_playbook"`, `"shared_memory"`
-- Use `resolveSpaceDisplayName()` and `resolveStoreDisplayName()` for UI display only
-- Normalization happens at API boundaries: `handleCreateSpace` and `handleAddStore`
-- See [SPACES.md](SPACES.md) for detailed examples and rationale
-
-**Why**: Ensures compatibility with all storage backends (Cassandra has strict table naming requirements, filesystems need safe paths, URLs need safe characters).
-
-## Simple store migration
-
-For operational moves, the simplest supported story is a file-folder migration:
-
-1. Stop the app.
-2. Backup the relevant store directories and configuration files.
-3. Copy the store folders to the target environment, keeping the same layout and paths.
-4. Start the app against the copied data and verify startup, authentication, session handling, and basic store access.
-
-This is a good default because SOP data is stored in filesystem-backed stores and the migration is effectively a copy of those directories. It is straightforward, low-risk, and easy to rollback if needed.
-
-## Authentication Architecture
-
-**CRITICAL:** This codebase uses a **unified authentication system**. Do not create parallel auth logic.
-
-### Single Source of Truth
-
-All authentication is handled by the shared `sopbackend` layer:
-
-- **Token creation:** `sopbackend.CreateSession()`
-- **Token validation:** `sopbackend.AuthenticateBearerToken()`
-- **Session cookies:** `sop_access_token`, `sop_refresh_token`
-- **Auth context:** `sop.ContextWithAuth()` and `sop.GetAuthFromContext()`
-
-### User Store Override Pattern
-
-The site backend installs a user store override so sopbackend validates against the site's persistent user store instead of config.json:
-
-```go
-// src/backend/site/main.go (registerSiteHandlers)
-siteaccount.InstallSopbackendUserStoreOverride()
-sopbackend.RegisterAllHandlersWithoutRoot(mux)
+```sh
+go test ./...
+go test ./lib/sop/...
 ```
 
-After this override is installed:
-- `/api/auth/login` uses site users
-- `sopbackend.AuthenticateBearerToken()` validates against site users
-- `sopbackend.CreateSession()` issues tokens for site users
-- All RequireAuth middleware uses site users
+The Cline SDK host requires Node.js 22 or newer:
 
-## Provisioning Direction
+```sh
+cd tools/cline-sdk-host
+npm ci
+npm run build
+```
 
-First-boot provisioning is now split by host semantics.
+The site package can be tested independently with `go test ./src/backend/site ./src/backend/siteapi`. For daemon behavior, run `go test ./lib/sop/cmd/sop-daemon`.
 
-The intended direction is:
+## Site Development
 
-- HQ continues to support the guided Setup Wizard flow
-- daemon gets its own provisioning implementation under `cmd/sop-daemon`
-- daemon provisioning should remain visually consistent with the Setup Wizard, but must not reuse HQ/httpserver provisioning handlers
-- daemon provisioning supports both `Simple` setup and `Advanced` setup
-- daemon `Simple` setup should perform the current quick-provision behavior explicitly, triggered by user action rather than startup-side auto-mutation
-- daemon `Advanced` setup should provision only the System DB and expose only the equivalent of Setup Wizard Page 2: storage mode, path, Redis, stores folders, erasure coding, and hash mod
-- missing environment state such as a missing `config.json` should trigger a daemon-specific provisioning status path, not the HQ/shared config-save flow
-- configured system DB repair during daemon startup should not silently provision missing state; provisioning should be explicit from the daemon UI
+The site Go backend is launched from the repository root with:
 
-This keeps the user-facing first-run experience stylistically aligned across hosts while preserving a clean architectural boundary between HQ/httpserver provisioning and daemon provisioning.
+```sh
+go run ./src/backend/site
+```
 
-See [SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md](SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md) for the refactor plan.
+Build the React frontend from `src/frontend` using its package scripts. The site frontend, shared Data Manager, and local daemon are separate surfaces; test the route/runtime you changed rather than assuming one serves the others.
 
-### Where Auth Logic Lives
+## Working Conventions
 
-| Component | Responsibility | Location |
-|-----------|---------------|----------|
-| Core auth (tokens, sessions) | `sopbackend` | `lib/sop/tools/sopbackend/auth.go` |
-| User store override | `siteaccount` | `src/backend/siteaccount/sopbackend_override.go` |
-| Site-specific wrappers | `siteaccount` | `src/backend/siteaccount/handlers.go` (`withSiteAuth`) |
-| Subscription enforcement | `site` | `src/backend/site/main.go` (`siteAppAccessHandler`) |
+- Ask/ReAct is the standard outer controller; capabilities are participants. See [WORKFLOWS.md](WORKFLOWS.md).
+- Keep request/session state explicit and ensure cancellation reaches subprocesses.
+- Update the canonical feature guide when a runtime contract changes. Use dated implementation records for historical evidence, not as current setup instructions.
+- Prefer existing shared APIs and domain boundaries over duplicating behavior in a host-specific package.
 
-### DO NOT
-
-❌ Create duplicate login endpoints  
-❌ Implement parallel token validation  
-❌ Build custom session management  
-❌ Bypass `sopbackend.AuthenticateBearerToken()`  
-❌ Create separate auth context population  
-
-### DO
-
-✅ Use `sopbackend.CreateSession()` for new tokens  
-✅ Use `sopbackend.AuthenticateBearerToken()` for validation  
-✅ Delegate to `sopbackend` handlers where possible  
-✅ Add site-specific logic AFTER auth validation, not instead of it  
-✅ Read inline comments in `src/backend/site/main.go` and `src/backend/siteaccount/handlers.go`  
-
-### Reference Documentation
-
-See [AUTH_QUICK_REFERENCE.md](AUTH_QUICK_REFERENCE.md) for detailed architecture diagrams and API endpoints.
-
-## Design conventions
-
-- Prefer explicit request structs and explicit parameters over context-based state passing.
-- Keep handlers focused on parsing input, validating it, and coordinating calls.
-- Put orchestration for the product experience in the site/backend layer, not in the shared runtime.
-- Document new product features in the docs tree so future maintainers can find them quickly.
-- Shape shared runtime features in `sopbackend` so new host types can reuse them with explicit host profiles rather than app-specific branching.
-
-## Where to look first
-
-- [README.md](../README.md): repository purpose and high-level architecture
-- [src/README.md](../src/README.md): the product-layer layout and conventions
-- [docs/AUTH_QUICK_REFERENCE.md](AUTH_QUICK_REFERENCE.md): unified authentication architecture (read this before touching auth code)
-- [docs/NEW_SITE_STORIES.md](NEW_SITE_STORIES.md): product stories for the new site experience
-- [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](NEW_SITE_IMPLEMENTATION_TASKS.md): implementation task list
+For the complete map, start at the [documentation index](INDEX.md).

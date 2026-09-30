@@ -1161,5 +1161,5 @@ Legend:
 
 For questions or clarifications, refer to:
 - [PHASE_PLAN_IMPLEMENTATION_DESIGN.md](./PHASE_PLAN_IMPLEMENTATION_DESIGN.md) - Current phase system
-- [ARCHITECTURE_PATTERNS.md](../lib/sop/ai/agent/ARCHITECTURE_PATTERNS.md) - Participant Pattern
-- [PLANNING_FIRST_LLM_ORCHESTRATION.md](./PLANNING_FIRST_LLM_ORCHESTRATION.md) - Phase succession design
+- [ARCHITECTURE_PATTERNS.md](WORKFLOWS.md) - Participant Pattern
+- [PLANNING_FIRST_LLM_ORCHESTRATION.md](ASK_V2_ARCHITECTURE.md) - Phase succession design

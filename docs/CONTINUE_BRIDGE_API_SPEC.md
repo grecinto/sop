@@ -1,6 +1,12 @@
 # Continue Native Transport API Spec
 
-**Status**: Active
+**Status**: Legacy compatibility reference; not the shipping copilot contract.
+
+Continue is retained as a non-shipping adapter. The current backend contract is
+[IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md), and the selected Cline
+SDK integration is described in [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
+The route details below document a compatibility surface and must be checked
+against the current daemon handlers before use.
 
 ## Purpose
 
@@ -237,7 +243,7 @@ When `tool_call` events are emitted, the Continue AI Studio provider translates 
 
 This pipeline now also supports surfaced IDE-native diagnostics and navigation tools including problems, definitions, type definitions, references, document symbols, and terminal contents.
 
-See [docs/CONTINUE_IDE_WORKFLOW_SURFACE.md](docs/CONTINUE_IDE_WORKFLOW_SURFACE.md) for the current workflow inventory and SDLC coverage boundary.
+The old Continue tool inventory was consolidated into [CONTINUE_REFERENCE.md](CONTINUE_REFERENCE.md); it is a historical compatibility record, not a current product capability list.
 
 #### Example response
 

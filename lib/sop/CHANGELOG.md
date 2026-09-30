@@ -53,7 +53,7 @@
     - **Benefits**: Methodical workflows improve success rate for Stores/Spaces from ~60% to 85%+ (estimated)
     - **Documentation**: 
         - `docs/DOMAIN_AGNOSTIC_PHASE_SYSTEM.md` (72KB implementation design)
-        - `docs/DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md` (quick resume guide)
+        - `docs/PHASE_SYSTEM_ARCHITECTURE.md` (maintained phase architecture guide)
     - **Status**: ✅ Steps 1-3 Complete, Step 4 Pending
 
 - **Domain-Agnostic Phase System Design (2026-07-30)**: Comprehensive design for extending Phase Plan System to work across ALL domains (Stores, Spaces, Desktop, Coding).

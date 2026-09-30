@@ -63,7 +63,7 @@ This is **Swarm Computing**. This is SOP.
 
 See the "Concurrent Transactions" examples in our language bindings for practical implementations of Swarm Computing:
 
-*   **Python**: [Concurrent Demo (Standalone)](bindings/python/examples/concurrent_demo_standalone.py) and [Cookbook](bindings/python/COOKBOOK.md#4-concurrent-transactions-swarm-computing)
+*   **Python**: [Concurrent Demo (Standalone)](bindings/python/sop/examples/concurrent_demo_standalone.py) and [Cookbook](bindings/python/COOKBOOK.md#4-concurrent-transactions-swarm-computing)
 *   **C#**: [Concurrent Demo (Standalone)](bindings/csharp/Sop.CLI/ConcurrentTransactionsDemoStandalone.cs) and [README](bindings/csharp/README.md#concurrent-transactions-example)
 
 ### Practical Tip: The "First Commit" Rule

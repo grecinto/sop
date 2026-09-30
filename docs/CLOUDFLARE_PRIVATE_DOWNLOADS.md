@@ -1,7 +1,7 @@
 # Private Cloudflare downloads with short-lived signed URLs
 
-The existing download flow already supports a private artifact source. The site checks entitlement in [src/backend/siteapi/handlers.go](src/backend/siteapi/handlers.go), returns a `download_url`, and the UI in [src/frontend/src/App.tsx](src/frontend/src/App.tsx) opens it.
-TODO: When the daemon release is published and the Cloudflare-hosted asset is ready, replace the current fallback URL in [src/backend/siteapi/handlers.go](src/backend/siteapi/handlers.go) with the Cloudflare object URL or a short-lived signed URL generated for that release.
+The existing download flow already supports a private artifact source. The site checks entitlement in [src/backend/siteapi/handlers.go](../src/backend/siteapi/handlers.go), returns a `download_url`, and the UI in [src/frontend/src/App.tsx](../src/frontend/src/App.tsx) opens it.
+TODO: When the daemon release is published and the Cloudflare-hosted asset is ready, replace the current fallback URL in [src/backend/siteapi/handlers.go](../src/backend/siteapi/handlers.go) with the Cloudflare object URL or a short-lived signed URL generated for that release.
 To make the binary private while still allowing a secure download experience, generate a short-lived signed URL from your storage backend before returning it.
 
 ## Recommended approach
@@ -17,7 +17,7 @@ Use Cloudflare R2 as the storage backend and sign a `GetObject` URL for a short 
 
 ## Backend hook
 
-The integration point is the existing endpoint in [src/backend/siteapi/handlers.go](src/backend/siteapi/handlers.go):
+The integration point is the existing endpoint in [src/backend/siteapi/handlers.go](../src/backend/siteapi/handlers.go):
 
 - `GET /api/auth/download`
 - It already performs entitlement checks.

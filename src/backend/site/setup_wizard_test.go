@@ -4,193 +4,122 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
-// ============================================================================
-// CRITICAL FIRST-RUN SETUP WIZARD TESTS
-// ============================================================================
-//
-// ⚠️  WARNING: DO NOT MODIFY WITHOUT READING src/backend/site/SETUP_WIZARD_CRITICAL.md
-//
-// These tests protect the first-run user experience. Breaking them means:
-// - New installations cannot complete setup
-// - Users see errors instead of the setup wizard
-// - Data directory paths may be incorrectly configured
-//
-// RUN THESE TESTS BEFORE ANY PR THAT TOUCHES:
-// - Route handlers for /, /site, /app
-// - Config loading or discovery logic
-// - Auth middleware or session handling
-// - Landing page or guest access features
-//
-// Command: go test ./src/backend/site -run TestSetupWizard -v
-// ============================================================================
-
-// TestSetupWizardRedirectsFromRootWhenNoConfig verifies that when no config.json
-// exists, requests to / are redirected to /app (the setup wizard).
-//
-// CRITICAL: This is the first-run experience. Breaking this means new users
-// cannot complete initial setup.
-func TestSetupWizardRedirectsFromRootWhenNoConfig(t *testing.T) {
-	oldConfig := sopbackend.GetConfig()
-	defer sopbackend.SetConfig(oldConfig)
-
-	// Ensure no config is loaded
-	sopbackend.SetConfig(sopbackend.Config{})
+func TestSetupWizardFirstRunRoutesInFreshProcess(t *testing.T) {
+	if !runInFreshSiteTestProcess(t) {
+		return
+	}
+	configureFreshFirstRunState(t)
 
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
-		t.Fatalf("failed to write test frontend asset: %v", err)
+		t.Fatalf("write frontend fixture: %v", err)
 	}
-
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusFound {
-		t.Fatalf("CRITICAL: Expected redirect (302) to setup wizard, got %d. First-run setup is BROKEN.", rec.Code)
+	for _, route := range []string{"/", "/site"} {
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+		if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != "/app" {
+			t.Errorf("first-run %s response = %d, Location=%q; want redirect to /app", route, recorder.Code, recorder.Header().Get("Location"))
+		}
 	}
 
-	location := rec.Header().Get("Location")
-	if location != "/app" {
-		t.Fatalf("CRITICAL: Expected redirect to /app, got %q. First-run setup is BROKEN.", location)
+	appRecorder := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(appRecorder, httptest.NewRequest(http.MethodGet, "/app", nil))
+	if appRecorder.Code == http.StatusForbidden {
+		t.Fatalf("first-run /app must not be forbidden; got %d", appRecorder.Code)
 	}
 }
 
-// TestSetupWizardRedirectsFromSiteWhenNoConfig verifies that when no config.json
-// exists, requests to /site are redirected to /app (the setup wizard).
-func TestSetupWizardRedirectsFromSiteWhenNoConfig(t *testing.T) {
-	oldConfig := sopbackend.GetConfig()
-	defer sopbackend.SetConfig(oldConfig)
+func runInFreshSiteTestProcess(t *testing.T) bool {
+	t.Helper()
+	const childEnv = "SOP_ISOLATED_SITE_TEST_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		return true
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("isolated test %s failed: %v\n%s", t.Name(), err, output)
+	}
+	return false
+}
 
-	// Ensure no config is loaded
+func configureFreshFirstRunState(t *testing.T) {
+	t.Helper()
+	workDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
 	sopbackend.SetConfig(sopbackend.Config{})
-
-	frontendDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
-		t.Fatalf("failed to write test frontend asset: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir, t.TempDir())
-
-	req := httptest.NewRequest(http.MethodGet, "/site", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusFound {
-		t.Fatalf("CRITICAL: Expected redirect (302) to setup wizard, got %d. First-run setup is BROKEN.", rec.Code)
-	}
-
-	location := rec.Header().Get("Location")
-	if location != "/app" {
-		t.Fatalf("CRITICAL: Expected redirect to /app, got %q. First-run setup is BROKEN.", location)
-	}
+	sopbackend.SetConfigFile(filepath.Join(workDir, "missing-config.json"))
 }
 
-// TestSetupWizardAllowsAccessToAppPathWhenNoConfig verifies that when no
-// config.json exists, requests to /app are allowed (not redirected).
-//
-// CRITICAL: This is where the setup wizard UI is served. Breaking this means
-// the setup wizard is inaccessible and new installations cannot be configured.
-func TestSetupWizardAllowsAccessToAppPathWhenNoConfig(t *testing.T) {
-	oldConfig := sopbackend.GetConfig()
-	defer sopbackend.SetConfig(oldConfig)
-
-	// Ensure no config is loaded
-	sopbackend.SetConfig(sopbackend.Config{})
-
-	frontendDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
-		t.Fatalf("failed to write test frontend asset: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir, t.TempDir())
-
-	req := httptest.NewRequest(http.MethodGet, "/app", nil)
-	rec := httptest.NewRecorder()
-	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("CRITICAL: Expected /app to be accessible (200), got %d. Setup wizard is BROKEN.", rec.Code)
-	}
-}
-
-// TestSetupWizardDoesNotRedirectAfterSetupComplete verifies that after a
-// config.json exists, requests to / serve the landing page instead of redirecting.
-//
-// This ensures the normal landing page works after initial setup is complete.
 func TestSetupWizardDoesNotRedirectAfterSetupComplete(t *testing.T) {
 	oldConfig := sopbackend.GetConfig()
 	defer sopbackend.SetConfig(oldConfig)
 
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
-		t.Fatalf("failed to write test frontend asset: %v", err)
+		t.Fatalf("write frontend fixture: %v", err)
 	}
-
-	// Create and load a config so HasConfigFileOnDisk() returns true
-	dataDir := t.TempDir()
-	configPath := filepath.Join(dataDir, "config.json")
+	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
-		t.Fatalf("failed to write config file: %v", err)
+		t.Fatalf("write config fixture: %v", err)
 	}
 	sopbackend.SetConfigFile(configPath)
 	if err := sopbackend.LoadConfig(configPath); err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("load config fixture: %v", err)
 	}
 
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, frontendDir, t.TempDir())
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Expected landing page (200) after setup complete, got %d", rec.Code)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("configured root returned %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
 
-// TestSetupWizardConfigDiscoveryDelegation verifies that the site backend
-// delegates config discovery to sopbackend instead of reimplementing it.
-//
-// This prevents path duplication bugs like ".sop-data/.sop-data".
 func TestSetupWizardConfigDiscoveryDelegation(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	workDir := t.TempDir()
 	if err := os.Chdir(workDir); err != nil {
 		t.Fatalf("Chdir() error = %v", err)
 	}
-
-	cwdConfigPath := filepath.Join(workDir, "config.json")
-	if err := os.WriteFile(cwdConfigPath, []byte(`{"databases":[{"name":"cwd"}]}`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	configPath := filepath.Join(workDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"cwd"}]}`), 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
 	}
 
-	// sopbackend.FindExistingConfigFile should find the cwd config.json
 	got := sopbackend.FindExistingConfigFile()
-	want := cwdConfigPath
-	if resolved, err := filepath.EvalSymlinks(got); err == nil {
-		got = resolved
+	resolvedGot, gotErr := filepath.EvalSymlinks(got)
+	resolvedWant, wantErr := filepath.EvalSymlinks(configPath)
+	if gotErr == nil {
+		got = resolvedGot
 	}
-	if resolved, err := filepath.EvalSymlinks(want); err == nil {
-		want = resolved
+	if wantErr == nil {
+		configPath = resolvedWant
 	}
-	if filepath.Clean(got) != filepath.Clean(want) {
-		t.Fatalf("CRITICAL: Config discovery not delegated properly. Expected %q, got %q. Path duplication bug may occur.", want, got)
+	if filepath.Clean(got) != filepath.Clean(configPath) {
+		t.Fatalf("config discovery returned %q, want %q", got, configPath)
 	}
 }

@@ -285,5 +285,5 @@ For issues with Space Federation:
 
 - [SPACE_FEDERATION_API.md](SPACE_FEDERATION_API.md) - Complete API reference
 - [SPACE_FEDERATION_IMPLEMENTATION_SUMMARY.md](SPACE_FEDERATION_IMPLEMENTATION_SUMMARY.md) - Technical details
-- [OPERATIONS.md](OPERATIONS.md) - General operational procedures
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture overview
+- [OPERATIONS.md](../OPERATIONS.md) - General operational procedures
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - System architecture overview

@@ -450,7 +450,7 @@ For the current architecture, see:
 - [V2 Ask ReAct Loop Gap Analysis](./V2_ASK_REACT_LOOP_GAP_ANALYSIS.md) - Full 3-phase design
 - [Tier 1 Implementation](./TIER1_REACT_GAP_FIXES_IMPLEMENTATION.md) - Classification reasoning + hints
 - [Tier 2A Implementation](./TIER2A_LLM_CONTROLLED_RETRY_IMPLEMENTATION.md) - Hint-driven retry
-- [Architecture Patterns](./ARCHITECTURE_PATTERNS.md) - Participant pattern compliance
+- [Architecture Patterns](WORKFLOWS.md) - Participant pattern compliance
 
 ---
 

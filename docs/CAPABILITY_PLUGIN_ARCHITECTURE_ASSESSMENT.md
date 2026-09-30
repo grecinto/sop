@@ -996,7 +996,7 @@ User Query → Ask() → Capability.OnStart() [initialize workflow state]
            ↓
         Capability.OnAfterTurn() [decide if continue]
            ↓
-        Continue: next ReAct turn | Complete: OnFinalize() → Epilogue
+        Next Ask/ReAct turn | Complete: OnFinalize() → Epilogue
 ```
 
 ### Proposed Interface Extension

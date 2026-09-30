@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func TestSiteBackendInitializesAgents(t *testing.T) {
 	}
 
 	// The key part: InitializeRuntime should load agents
-	if _, err := sopbackend.InitializeRuntime(nil, configPath, sopbackend.RuntimeOptions{
+	if _, err := sopbackend.InitializeRuntime(context.Background(), configPath, sopbackend.RuntimeOptions{
 		EnableLocalAutomation: false,
 	}, 0, nil); err != nil {
 		// The error might be about missing agent config file, which is expected

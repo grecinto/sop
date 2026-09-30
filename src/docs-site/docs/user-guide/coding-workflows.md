@@ -31,7 +31,7 @@ In practice, that means AI Studio can:
 - delegate a bounded step remotely
 - keep orchestration, memory, and handoff inside AI Studio
 
-This lets integrations such as Continue contribute editor context and actions while AI Studio keeps the task connected to its phases, memory, and workstream.
+This lets the daemon-managed Cline SDK backend execute a bounded coding task while AI Studio Ask keeps the request connected to its phases, memory, and workstream.
 
 :::tip For Developers
 Want to understand the technical architecture? See the SDK documentation:
@@ -278,7 +278,7 @@ This is especially useful in real projects because the enrichment survives diffe
 
 - direct AI Studio coding tools can use it
 - multi-phase workflow planning can use it
-- delegated IDE companions such as Continue can use it
+- delegated Cline execution can use it
 
 So a short request like:
 

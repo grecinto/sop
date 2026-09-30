@@ -1010,7 +1010,7 @@ If a capability currently creates a secondary loop:
 5. Remove queue injection or separate orchestration loop
 6. Use `OnAfterTurn` to decide if workflow continues
 
-**Example**: The coding workflow capability is being refactored from queue-based multi-turn orchestration to lifecycle-based participation. See [docs/CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md](/Volumes/T7/sop-cloud/docs/CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md) for detailed migration guide.
+**Example**: Coding workflow capabilities participate in the Ask-owned orchestration path. See [WORKFLOWS.md](WORKFLOWS.md) and [the current codingworkflow package guide](ai/agent/codingworkflow/README.md); do not use the former single-loop refactor proposal as a current migration plan.
 
 #### When Secondary Loops Are Acceptable
 

@@ -1,6 +1,6 @@
 # LTM Category Auto-Share Implementation Summary
 
-> **Related Documentation**: This document describes HQ-level category controls. For comprehensive daemon-level privacy governance, user opt-out controls, and PII detection, see [Fleet Learning Privacy Governance](FLEET_LEARNING_PRIVACY_GOVERNANCE.md).
+> **Related Documentation**: This document describes HQ-level category controls. For comprehensive daemon-level privacy governance, user opt-out controls, and PII detection, see [Fleet Learning Privacy Governance](FLEET_LEARNING.md).
 
 ## Overview
 
@@ -363,7 +363,7 @@ curl -H "Authorization: Bearer <SA_TOKEN>" \
 
 ### Manual Test Scenarios
 
-Comprehensive test guide: [docs/SPACE_FEDERATION_MANUAL_TEST.md](SPACE_FEDERATION_MANUAL_TEST.md#phase-8-ltm-category-auto-share-controls-sa-only)
+Comprehensive test guide: [docs/SPACE_FEDERATION_MANUAL_TEST.md](FEDERATION.md)
 
 **Phase 8** covers:
 1. List all LTM categories and auto-share settings
@@ -634,8 +634,8 @@ Repo-scoped coding memory now uses a lightweight lifecycle heartbeat driven by a
 - Core agent routing and prompt assembly: [lib/sop/ai/agent/copilot.go](../lib/sop/ai/agent/copilot.go)
 - Routing and continuity hints: [lib/sop/ai/agent/copilot_routing.go](../lib/sop/ai/agent/copilot_routing.go)
 - Selected-space grounding: [lib/sop/ai/agent/copilot_selected_space.go](../lib/sop/ai/agent/copilot_selected_space.go)
-- Coding workflow context assembly: [lib/sop/ai/agent/codingworkflow/orchestrator.go](../lib/sop/ai/agent/codingworkflow/orchestrator.go)
-- Coding workflow capability registration: [lib/sop/ai/agent/codingworkflow/capability.go](../lib/sop/ai/agent/codingworkflow/capability.go)
+- Ask context assembly: [ask_pipeline.go](../lib/sop/ai/agent/ask_pipeline.go)
+- Delegated coding capability: [ideworker capability](../lib/sop/ai/agent/domains/ideworker/capability.go)
 
 ## Completed Work
 

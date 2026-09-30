@@ -300,6 +300,7 @@ queue.Enqueue(WorkItem{
 
 ## References
 
-- [Phase 4 Design Doc](../docs/PHASE4_PARALLEL_EXECUTION.md)
-- [Multi-Turn Orchestration](../lib/sop/ai/README.md#multi-turn-queue-based-orchestration)
-- [Shell Session Persistence](../docs/SHELL_SESSION_PERSISTENCE.md)
+- [Parallel PTY Design](../../../../docs/DUAL_PTY_PARALLEL_EXECUTION.md)
+- [Ask/agent architecture](../README.md)
+- [Parallel PTY execution](../../../../docs/DUAL_PTY_PARALLEL_EXECUTION.md)
+- [Shell Session Persistence](../../../../docs/SHELL_SESSION_PERSISTENCE.md)

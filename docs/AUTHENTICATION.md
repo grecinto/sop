@@ -349,32 +349,18 @@ This same bootstrap and refresh pattern is also the expected local-auth path for
 - Continue renews daemon-local access through `POST /api/daemon/refresh`.
 - Continue must not treat those daemon-local tokens as HQ credentials.
 
-### Continue, Daemon, and HQ session boundaries
+### Legacy Continue session boundary
 
-Continue operates with two independent authenticated sessions:
+The following older two-token/HQ-handoff design applies only to the retained,
+non-shipping Continue bridge. It is not the Cline SDK authentication flow.
+Continue compatibility details are in [CONTINUE_REFERENCE.md](CONTINUE_REFERENCE.md)
+and [CONTINUE_BRIDGE_API_SPEC.md](CONTINUE_BRIDGE_API_SPEC.md).
 
-1. HQ session
-    - authenticates Continue directly with Northstar HQ
-    - owns HQ access token, HQ refresh token, and forced re-authentication cadence
-2. Daemon session
-    - authenticates Continue to the local daemon bridge
-    - owns daemon access token and daemon refresh token
-
-The daemon session is local-runtime auth only. The HQ session is remote control-plane auth only.
-
-For user experience, the HQ session may be handed over from daemon to Continue after the user authenticated through AI Studio UI. That avoids a second immediate HQ login when the user switches from the AI Studio surface into IDE coding.
-
-When Continue calls daemon bridge endpoints, daemon bearer auth still happens via the `Authorization` header. Separately, Continue should pass its current HQ connectivity information into the daemon request body/config so daemon-side federation logic can later talk to HQ under the same Continue-owned session.
-
-That propagated HQ context should include:
-
-- HQ base URL
-- HQ user ID
-- HQ session ID
-- HQ access token
-- HQ refresh token when daemon background sync and renewal need to continue beyond the current request lifetime
-
-The reverse handoff is also supported: daemon may provide the current HQ connectivity and token context back to Continue when invoking a registered Continue worker. After that handoff, Continue continues operating and refreshing under that adopted HQ session until a normal re-authentication boundary is reached.
+For the current Data Manager -> SOP Ask -> Cline SDK path, the daemon validates
+its own bearer session. The Cline host receives the scoped task/provider context
+from the daemon and calls authenticated SOP MCP tools using the daemon-provided
+token. Do not pass HQ credentials to the Cline host or confuse provider API keys
+with daemon authentication.
 
 ---
 

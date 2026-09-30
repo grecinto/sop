@@ -1,4 +1,6 @@
 # Active Memory
+Current privacy and fleet-sharing status is summarized in [FEDERATION.md](../../../../docs/FEDERATION.md) and [FLEET_LEARNING.md](../../../../docs/FLEET_LEARNING.md).
+
 This document outlines the LongTermMemory Provisioning & ShortTermMemory Interception architecture that emulates human cognition within the SOP AI engine, acting as a deeply aware "Butler".
 
 ## Architectural Philosophy
@@ -224,7 +226,7 @@ The daemon has **three tiers of learning**:
 - Track provenance and usage
 - Handle revocation requests
 
-For complete implementation details, see [Fleet Learning Privacy Governance](/Volumes/T7/sop-cloud/docs/FLEET_LEARNING_PRIVACY_GOVERNANCE.md).
+For current federation and fleet-sharing status, see [FEDERATION.md](../../../../docs/FEDERATION.md) and [FLEET_LEARNING.md](../../../../docs/FLEET_LEARNING.md).
 - The LLM may emit caveat events with structured metadata, including severity, scope, and a recommended re-injection interval.
 - The runtime can then use that metadata to decide whether a caveat should be injected immediately, re-injected on the next turn, or scheduled for a later periodic sweep.
 - This gives the system a hybrid behavior: deterministic carry-over for high-signal continuity, plus LLM-guided timing for adaptive relevance.

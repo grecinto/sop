@@ -20,9 +20,9 @@ It provides components for building local AI applications on top of SOP's B-Tree
 ### Workflow Documentation
 
 For comprehensive workflow system documentation, see:
-*   **[Workflow Lifecycle Assessment](../../docs/WORKFLOW_LIFECYCLE_ASSESSMENT.md)** - Complete implementation guide (authoring → compilation → preload → runtime)
-*   [Workflow Strategy](../../docs/WORKFLOW_STRATEGY_ASSESSMENT.md) - Core Playbook as workflow standard library
-*   [Workflow Tools Proposal](../../docs/WORKFLOW_COPILOT_INTEGRATION_PROPOSAL.md) - User-facing workflow management tools
+*   **[Ask architecture](../../../docs/ASK_V2_ARCHITECTURE.md)** - Current Ask/ReAct control flow and state handoff
+*   [Workflow architecture](../../../docs/WORKFLOWS.md) - Current participant pattern and multi-turn workflow contract
+*   [Cline integration](../../../docs/CLINE_COPILOT_INTEGRATION_PLAN.md) - Current bounded coding backend
 
 ## Core Components
 
@@ -70,7 +70,7 @@ The core of the **Computing Platform**. It allows you to define complex, multi-s
 *   **Agent Framework**: Define agents with Personality, Memory, and Tool access.
 *   **Interoperable**: Scripts are stored as JSON and can be managed/visualized via the AI Studio.
 
-See [ai/agent/README.md](ai/agent/README.md) for full documentation on Scripts, Swarm Computing, and the Tool Registry.
+See [agent/README.md](agent/README.md) for the agent framework overview.
 
 #### Domain Classification & Tool Filtering
 

@@ -5,14 +5,14 @@
 ### 1. Core Infrastructure
 
 **Files Modified:**
-- [config.go](lib/sop/ai/agent/config.go) - Added `TestMode bool` field to `Config` struct
-- [copilottools.utils.go](lib/sop/ai/agent/copilottools.utils.go) - Added `CtxKeyTestMode`, `isTestMode()`, `WithTestMode()`
-- [ask_pipeline.go](lib/sop/ai/agent/ask_pipeline.go) - Propagates test mode from config to context
+- [config.go](../lib/sop/ai/agent/config.go) - Added `TestMode bool` field to `Config` struct
+- [copilottools.utils.go](../lib/sop/ai/agent/copilottools.utils.go) - Added `CtxKeyTestMode`, `isTestMode()`, `WithTestMode()`
+- [ask_pipeline.go](../lib/sop/ai/agent/ask_pipeline.go) - Propagates test mode from config to context
 
 **New Files Created:**
-- [test_helpers.go](lib/sop/ai/agent/test_helpers.go) - Test utilities (`EnableTestMode()`, `TestConfig()`, etc.)
-- [docs/TEST_MODE_FALLBACK_SYSTEM.md](docs/TEST_MODE_FALLBACK_SYSTEM.md) - Comprehensive documentation
-- [docs/TEST_MODE_REFACTORING_FINDINGS.md](docs/TEST_MODE_REFACTORING_FINDINGS.md) - Investigation findings
+- [test_helpers.go](../lib/sop/ai/agent/test_helpers.go) - Test utilities (`EnableTestMode()`, `TestConfig()`, etc.)
+- [docs/TEST_MODE_FALLBACK_SYSTEM.md](TEST_MODE_FALLBACK_SYSTEM.md) - Comprehensive documentation
+- [docs/TEST_MODE_REFACTORING_FINDINGS.md](TEST_MODE_REFACTORING_FINDINGS.md) - Investigation findings
 
 ### 2. Gated Fallbacks Implemented ✅
 
@@ -231,7 +231,7 @@ cfg := Config{TestMode: false} // or omit (default is false)
 
 ## Related Documentation
 
-- [TEST_MODE_FALLBACK_SYSTEM.md](docs/TEST_MODE_FALLBACK_SYSTEM.md) - Complete system guide
-- [ARCHITECTURE_PATTERNS.md](docs/ARCHITECTURE_PATTERNS.md) - Participant pattern
-- [config.go](lib/sop/ai/agent/config.go) - Config structure
-- [test_helpers.go](lib/sop/ai/agent/test_helpers.go) - Test utilities
+- [TEST_MODE_FALLBACK_SYSTEM.md](TEST_MODE_FALLBACK_SYSTEM.md) - Complete system guide
+- [ARCHITECTURE_PATTERNS.md](WORKFLOWS.md) - Participant pattern
+- [config.go](../lib/sop/ai/agent/config.go) - Config structure
+- [test_helpers.go](../lib/sop/ai/agent/test_helpers.go) - Test utilities

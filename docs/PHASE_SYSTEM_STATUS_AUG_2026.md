@@ -131,7 +131,7 @@ focused_execution_context: 9704 chars generated → 2600 chars kept (73% cut)
    - Debugging workflow
 
 ### Status & Plans
-3. **[DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md](./DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md)** (Updated)
+3. **[PHASE_SYSTEM_ARCHITECTURE.md](./PHASE_SYSTEM_ARCHITECTURE.md)** (Current architecture; this report is historical)
    - Added production status section
    - Links to debug resources
    - Ready for multi-domain extension
@@ -161,7 +161,7 @@ tail -f translogs/*.log | grep -E "Transaction evaluation|Enqueued next phase|cu
 
 ### Future: Extend to Other Domains
 
-Following [DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md](./DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md):
+Following [PHASE_SYSTEM_ARCHITECTURE.md](./PHASE_SYSTEM_ARCHITECTURE.md):
 
 1. **Stores Domain** (2-3 hours)
    - Implement StoresPhaseToolAdapter

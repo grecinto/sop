@@ -67,10 +67,10 @@ Connect AI Studio to the runtime that powers your workspace and work securely wi
 
 [Learn about AI Studio Connections →](./remote-daemon-access)
 
-### Continue as a Companion
-If you use Continue in your editor, it can act as a companion that sends coding requests to AI Studio. AI Studio provides orchestration, approvals, memory, and long-running tool execution.
+### Coding Execution
+The Data Manager has one Chat Send action. SOP Ask owns classification and orchestration, and may delegate a bounded coding task to the daemon's default Cline SDK backend. Continue remains compatibility/reference code, not a required editor companion.
 
-[Learn about the Continue facade architecture →](../sdk/continue-facade-architecture)
+[Learn about IDE copilot backends →](../sdk/ide-copilot-backend)
 
 ### AI Window Experience
 The AI window is the main surface for interaction. It stays visible while the AI runs commands, streams output, and keeps you informed about what is happening in real time.

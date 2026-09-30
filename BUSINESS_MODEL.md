@@ -40,7 +40,7 @@ The next product iteration for sop-cloud will center on a lightweight self-serve
 5. unsubscribe or unregister when desired,
 6. view a future richer plan for the HQ and local-agent experience, which is shown as a disabled preview for regular users and available for system-admin testing.
 
-The implementation notes and task backlog for this experience are tracked in [docs/NEW_SITE_STORIES.md](docs/NEW_SITE_STORIES.md) and [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](docs/NEW_SITE_IMPLEMENTATION_TASKS.md). The intended architecture keeps the existing Data Manager experience intact as the low-level operational UI, while the new product site/app is introduced as a separate React-based frontend served through httpserver on its own routes. The daemon remains separate from that UI surface.
+The site and account experience is now implemented in `src/frontend`, `src/backend/site`, and `src/backend/siteaccount`. The Data Manager remains the shared operational UI; the local daemon remains a separate runtime. See [DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) for current boundaries.
 
 The intended boundary is:
 - daemon: background/runtime responsibilities only;

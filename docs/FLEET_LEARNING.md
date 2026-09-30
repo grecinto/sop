@@ -1,6 +1,6 @@
 # Fleet Learning Privacy Governance
 
-> **Implementation Status**: See [Implementation Tracker](FLEET_LEARNING_PRIVACY_IMPLEMENTATION_TRACKER.md) for detailed task breakdown and progress.
+> **Status note:** This document contains historical implementation detail and privacy design. For federation context, see [FEDERATION.md](FEDERATION.md); the dated checklists below are not a live implementation tracker.
 
 ## Overview
 
@@ -507,6 +507,6 @@ func HandleSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 
 ## See Also
 
-- [LTM Category Auto-Share](LTM_CATEGORY_AUTO_SHARE.md) - HQ-level category controls
-- [Space Federation Implementation](SPACE_FEDERATION_IMPLEMENTATION_SUMMARY.md) - Technical implementation
-- [Active Memory Design](../lib/sop/ai/memory/ACTIVE_MEMORY_DESIGN.md) - Memory architecture
+- [LTM Category Auto-Share](LONG_TERM_MEMORY.md) - HQ-level category controls
+- [Space Federation Implementation](FEDERATION.md) - Technical implementation
+- [LONG_TERM_MEMORY.md](LONG_TERM_MEMORY.md) - Current memory lifecycle and category controls

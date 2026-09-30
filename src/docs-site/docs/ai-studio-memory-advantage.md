@@ -150,13 +150,13 @@ And AI Studio can still carry forward the team’s real requirements:
 - update the tests that cover timeout handling
 - produce a structured result describing the modified files and checks that ran
 
-This remains valuable even when AI Studio delegates the actual coding step to another agent surface such as Continue. AI Studio continues to manage the Ask pipeline, memory, and policy, and can include the best practices in the delegated request.
+This remains valuable when AI Studio delegates the actual coding step to the Cline SDK backend. AI Studio manages the Ask pipeline, memory, and policy, and includes the best practices in the bounded delegated request.
 
 The result is practical, not theoretical:
 
 - users define best practices once
 - AI Studio keeps applying them whenever coding work is requested
-- the same guidance can improve AI Studio tools and delegated IDE companions
+- the same guidance can improve native AI Studio tools and delegated Cline execution
 - teams get more consistency without manually repeating the same instructions in every chat
 
 ## Customer-facing benefits

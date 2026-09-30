@@ -273,29 +273,7 @@ func TestStartSiteBackgroundServicesStartsCleanupLoop(t *testing.T) {
 	startSiteBackgroundServices(ctx)
 }
 
-func TestSiteBackendDaemonBootstrapEndpointReturnsJsonErrorWhenBootstrapFileIsMissing(t *testing.T) {
-	frontendDir := t.TempDir()
-	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir, t.TempDir())
-
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/daemon/bootstrap-secret", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected bootstrap endpoint to return 404 when bootstrap file is missing, got %d", rec.Code)
-	}
-	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
-		t.Fatalf("expected JSON content type, got %q", contentType)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "Bootstrap file not found") {
-		t.Fatalf("expected bootstrap error body to mention missing bootstrap file, got %q", body)
-	}
-}
-
-func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) {
+func TestSiteBackendDoesNotExposeDaemonBootstrapSecret(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, frontendDir, t.TempDir())
@@ -309,18 +287,13 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) 
 	}
 	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(configRoot))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/daemon/bootstrap-secret", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected bootstrap endpoint to return 200, got %d", rec.Code)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/daemon/bootstrap-secret", nil))
+	if strings.Contains(recorder.Body.String(), "secret-value") {
+		t.Fatal("site backend exposed the daemon bootstrap secret")
 	}
-	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
-		t.Fatalf("expected JSON content type, got %q", contentType)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "secret-value") {
-		t.Fatalf("expected bootstrap secret response body to contain secret value, got %q", body)
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("site backend must not serve the daemon bootstrap endpoint, got %d", recorder.Code)
 	}
 }
 

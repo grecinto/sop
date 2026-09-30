@@ -263,7 +263,7 @@ For the current architecture, see:
 
 - [V2 Ask ReAct Loop Gap Analysis](./V2_ASK_REACT_LOOP_GAP_ANALYSIS.md) - Full 3-phase design
 - [Tier 1 Implementation](./TIER1_REACT_GAP_FIXES_IMPLEMENTATION.md) - Previous phase
-- [Architecture Patterns](./ARCHITECTURE_PATTERNS.md) - Participant pattern compliance
+- [Architecture Patterns](WORKFLOWS.md) - Participant pattern compliance
 
 ## Verification Checklist
 

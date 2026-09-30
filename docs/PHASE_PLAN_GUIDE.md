@@ -695,9 +695,9 @@ Response:
 
 ## Related Documentation
 
-- [ARCHITECTURE_PATTERNS.md](./ARCHITECTURE_PATTERNS.md) - Participant pattern details
-- [PLANNING_FIRST_LLM_ORCHESTRATION.md](./PLANNING_FIRST_LLM_ORCHESTRATION.md) - Full design specs
-- [PLANNING_FIRST_IMPLEMENTATION_STATUS.md](./PLANNING_FIRST_IMPLEMENTATION_STATUS.md) - Implementation tracking
+- [ARCHITECTURE_PATTERNS.md](WORKFLOWS.md) - Participant pattern details
+- [PLANNING_FIRST_LLM_ORCHESTRATION.md](ASK_V2_ARCHITECTURE.md) - Full design specs
+- [PHASE_PLAN_IMPLEMENTATION_DESIGN.md](./PHASE_PLAN_IMPLEMENTATION_DESIGN.md) - Phase-plan implementation reference
 - [STM_WORKSTREAM_STACK_DESIGN.md](./STM_WORKSTREAM_STACK_DESIGN.md) - Work stream management
 - [WORKFLOWS.md](./WORKFLOWS.md) - Complete participant pattern explanation
 

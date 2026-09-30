@@ -1,97 +1,34 @@
-# Ask V2 Implementation Summary
+# Ask Pipeline Implementation Status
 
-**Created**: 2026-07-30  
-**Status**: Active and aligned with the current codebase  
-**Location**: [lib/sop/ai/agent](lib/sop/ai/agent)
+**Updated:** 2026-09-29
 
----
+This is a short implementation snapshot. The maintained architecture and behavioral contract are in [ASK_V2_ARCHITECTURE.md](ASK_V2_ARCHITECTURE.md); this file is not a second architecture specification. “Ask V2” is a historical document name, not a separate feature-flagged runtime path.
 
-## What is implemented now
+## Current implementation
 
-The current implementation is a session-oriented Ask pipeline with:
+- Ask owns the outer request, queue, and continuation decisions.
+- Task routing selects relevant domains and capability/runtime surfaces.
+- Provider-owned ReAct loops run the model/tool interaction.
+- Clarification, retry/escalation, phase, workstream, and cognitive state are carried explicitly across turns.
+- Capabilities remain participants: they classify, provide context, expose tools, and execute bounded tool calls.
+- IDE coding delegation uses the shared `ideworker.Backend` contract. Cline SDK is the daemon's default backend; Continue is retained as compatibility/reference code.
 
-- queue-based Ask orchestration
-- phase-aware task routing
-- provider-owned ReAct execution
-- structured clarification state
-- structured retry guidance
-- a shared session-cognition snapshot
-- capability-level extension points for editor-native worker delegation
+## Code references
 
-The design is intentionally LAO-first: the model remains the primary orchestrator, while the system provides explicit policy surfaces for recovery, escalation, and guardrails.
+- Ask flow: [`ask_pipeline.go`](../lib/sop/ai/agent/ask_pipeline.go)
+- Shared session contracts: [`interfaces.go`](../lib/sop/ai/interfaces.go)
+- Cognitive layer: [`cognitive_layer.go`](../lib/sop/ai/agent/cognitive_layer.go)
+- Provider ReAct implementation example: [`chatgpt_react_loop.go`](../lib/sop/ai/generator/chatgpt_react_loop.go)
+- IDE worker interface: [`capability.go`](../lib/sop/ai/agent/domains/ideworker/capability.go)
+- Cline daemon implementation: [`cline_worker_bridge.go`](../lib/sop/cmd/sop-daemon/cline_worker_bridge.go)
 
----
+## Validation
 
-## Key implementation points
+Run from the repository root:
 
-### Ask pipeline
-The Ask pipeline now owns the outer flow and pauses the queue when clarification is pending. It also preserves the actor and phase context for queued follow-up work.
-
-Relevant implementation:
-- [lib/sop/ai/agent/ask_pipeline.go](lib/sop/ai/agent/ask_pipeline.go)
-
-### Phase and workstream state
-Phase plans and phase progression are persisted in the workstream context so that a paused or resumed task can continue from the same plan.
-
-### Structured retry and clarification state
-Retry guidance and clarification requests are now carried as structured state rather than inferred from loose prose. That makes handoff across Ask, ReAct, and phase capabilities more reliable.
-
-Relevant implementation:
-- [lib/sop/ai/interfaces.go](lib/sop/ai/interfaces.go)
-- [lib/sop/ai/generator/chatgpt_react_loop.go](lib/sop/ai/generator/chatgpt_react_loop.go)
-
-### Shared cognition snapshot
-A lightweight cognitive layer now collects turn state, memory signals, and policy-relevant flags in one shared place.
-
-The cognitive contract layer now includes:
-- `SessionCognitiveObservation` for factual runtime state
-- `SessionCognitiveAssessment` for structured situation interpretation
-- `CognitivePolicySurface` for advisory cognition above retry hard rails
-
-This now changes blocked-turn handling in one narrow place: escalated or
-clarification-bound turns are assessed by an LLM-backed strict-JSON evaluator,
-and the resulting recommendation is persisted in session cognitive state and
-surfaced to phase escalation logic as advisory metadata.
-
-Relevant implementation:
-- [lib/sop/ai/agent/cognitive_layer.go](lib/sop/ai/agent/cognitive_layer.go)
-- [lib/sop/ai/interfaces.go](lib/sop/ai/interfaces.go)
-- [lib/sop/ai/retry.go](lib/sop/ai/retry.go)
-- [lib/sop/ai/agent/ask_pipeline.go](lib/sop/ai/agent/ask_pipeline.go)
-- [lib/sop/ai/agent/codingworkflow/phase_capabilities.go](lib/sop/ai/agent/codingworkflow/phase_capabilities.go)
-
-### Continue delegation capability
-Ask now also has the foundations for a Continue-backed capability participant. The correct target shape is LAO-preserving: Continue requests still go through the normal Ask pipeline, and Continue participates as a passive coding executor that exposes one delegated tool embodying Continue's own local Ask/tool loop.
-
-The important architectural point is that the daemon LLM is still the outer orchestrator. It classifies the request as usual, selects phases as usual, and may still use other capabilities such as Spaces or Stores. Continue is used only when a bounded IDE-native coding slice should be completed locally in the editor.
-
-Relevant implementation:
-- [lib/sop/ai/agent/domains/ideworker/capability.go](lib/sop/ai/agent/domains/ideworker/capability.go)
-- [lib/sop/ai/agent/copilot.go](lib/sop/ai/agent/copilot.go)
-- [lib/sop/cmd/sop-daemon/ide_worker_bridge.go](lib/sop/cmd/sop-daemon/ide_worker_bridge.go)
-
----
-
-## Current validation
-
-The current implementation was verified with:
-
-```bash
-go test ./lib/sop/ai ./lib/sop/ai/agent ./lib/sop/ai/agent/codingworkflow -count=1
+```sh
+go test ./lib/sop/ai/agent/...
+go test ./lib/sop/cmd/sop-daemon
 ```
 
-That suite passed successfully and covers clarification pause behavior, cognitive-state handling, Ask routing integration, retry/cognitive policy behavior, and coding-workflow escalation handling.
-
----
-
-## Architectural takeaway
-
-The system is no longer described best as a simple “V2 pipeline with a feature flag.” It is better understood as a shared orchestration substrate where:
-
-- Ask controls the outer loop
-- phases remain passive participants
-- ReAct stays provider-native
-- state handoff is explicit and structured
-- a lightweight cognitive layer supports future policy growth
-- the cognitive layer now has explicit observation vs assessment contracts that are already used for blocked-turn LLM-backed situation handling
-- editor-native delegation can be added as a passive capability without creating a second controller
+For end-to-end Cline release validation requirements, see [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md). The legacy feature-flag rollout record remains in [ASK_V2_VERIFICATION.md](ASK_V2_VERIFICATION.md) and is historical only.

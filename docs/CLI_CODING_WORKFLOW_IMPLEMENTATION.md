@@ -113,7 +113,7 @@ The next layer for this stack is an explicit artifact inventory step. Today the 
 
 For the full consolidated rationale and decision history, see [WORKFLOWS.md](WORKFLOWS.md). This implementation doc remains the product-facing companion that focuses on the coding workflow experience, while the workflow doc captures the broader architectural intent.
 
-For the editor-facing facade model in VS Code, see [CONTINUE_FACADE_ARCHITECTURE.md](CONTINUE_FACADE_ARCHITECTURE.md). That document describes the recommended pattern of using Continue as a thin front-end over the shared workflow runtime instead of replacing it, and it also outlines the coding-native tool surface Continue should call, including AST/tree-sitter-backed inspection, patching, validation, workflow continuation, and later IDE-native semantic actions such as definition lookup, references, rename-oriented refactors, and type-aware navigation.
+For the retained Continue compatibility lessons, see [CONTINUE_REFERENCE.md](CONTINUE_REFERENCE.md). The shipping backend direction is documented in [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md); the shared backend contract is in [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md).
 
 ---
 
@@ -307,7 +307,7 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 ## Implementation Details
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
 - [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See the systematic test-fix protocol section in this document (§6.1).
-- [ ] **KB-Driven Workflow Orchestration (APPROVED)**: ✅ **DESIGN COMPLETE** - WorkflowManager with script auto-optimization and compilation path. See [docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md](/Volumes/T7/sop-cloud/docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md) for full design.
+- Historical KB-driven orchestration proposals were superseded by the shared Ask/participant architecture. See [WORKFLOWS.md](WORKFLOWS.md); this is not an active implementation checklist.
   - **Phase 1** (2-3 days): WorkflowManager + KB integration + interpreted execution
   - **Phase 2** (2-3 days): Script auto-optimization (detect when to use scripts vs tools)
   - **Phase 3** (2-3 days): Code generation (JSON → Go → Binary compilation)
@@ -344,7 +344,7 @@ The remaining work is mostly orchestration, context packaging, and execution rel
 
 ## Implemented Foundation
 
-The first facade-based milestone is now in place under [lib/sop/ai/agent/codingworkflow/orchestrator.go](../lib/sop/ai/agent/codingworkflow/orchestrator.go) and covered by [lib/sop/ai/agent/codingworkflow/orchestrator_test.go](../lib/sop/ai/agent/codingworkflow/orchestrator_test.go).
+The earlier facade-based orchestrator proposal is superseded. The current outer flow is in [`ask_pipeline.go`](../lib/sop/ai/agent/ask_pipeline.go), with reusable coding-workflow helpers participating in Ask. See [WORKFLOWS.md](WORKFLOWS.md) for the maintained architecture.
 
 This initial implementation provides:
 

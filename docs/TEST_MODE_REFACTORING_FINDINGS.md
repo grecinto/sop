@@ -320,7 +320,7 @@ ctx := context.WithValue(ctx, "session_payload", payload)
 
 - [TEST_MODE_FALLBACK_SYSTEM.md](TEST_MODE_FALLBACK_SYSTEM.md) - Complete system guide
 - [TEST_MODE_IMPLEMENTATION_STATUS.md](TEST_MODE_IMPLEMENTATION_STATUS.md) - Progress tracking
-- [/memories/repo/test-mode-fallback-gating.md](../memories/repo/test-mode-fallback-gating.md) - Quick reference
+- [/memories/repo/test-mode-fallback-gating.md](TEST_MODE_FALLBACK_SYSTEM.md) - Quick reference
 
 ## Next Steps (If Continuing)
 

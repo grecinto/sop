@@ -21,16 +21,16 @@ This means we separate capability responsibilities by scope:
 
 - General capabilities: cross-cutting concerns that apply across domains, such as routing, memory, session continuity, approvals, policy, retrieval, fallback behavior, and state management.
 - Domain-specific capabilities: specialized execution domains such as coding workflow, desktop automation, research, data operations, or other operational surfaces.
-- Runtime bridge capabilities: adapters that connect external systems or editor-native execution environments, such as Continue, into the same Ask pipeline without changing the outer control model.
+- Runtime bridge capabilities: adapters that connect external systems or execution environments, such as the Cline SDK backend, into the same Ask pipeline without changing the outer control model.
 
-The important architectural principle is: all of these still participate through the same capability contract and the same Ask/ReAct orchestration boundary. Continue is not a competing architecture or a second controller model. It is an integration substrate for editor-aware execution that should be wrapped behind a capability participant when needed.
+The important architectural principle is that all of these participate through the same capability contract and Ask/ReAct boundary. A worker backend is not a second controller. The current Cline SDK integration is wrapped behind the shared `ideworker` capability.
 
 This also means the system can evolve naturally:
 
 - a new general capability can add shared operational rules
 - a new coding workflow capability can add repository-aware execution patterns
 - a new desktop capability can add shell, app, and OS automation patterns
-- a Continue integration can augment the local IDE execution layer without taking ownership of orchestration, memory, or approval policy
+- a Cline SDK integration can provide bounded coding execution without taking ownership of orchestration, memory, or approval policy
 
 The result is a capability ecosystem in which some capabilities are broad and general, some are domain-specific, and some are narrow adapters for a runtime environment. The orchestration remains centralized; the capability surface remains pluggable.
 
@@ -44,7 +44,7 @@ The governing rule is simple:
 - Capabilities participate only within their declared scope and task family.
 - General capabilities handle cross-cutting concerns such as memory, routing, state, approval, and recovery.
 - Domain capabilities handle task families such as coding workflow or desktop automation.
-- Bridge capabilities such as Continue provide editor-native execution only through explicit delegation.
+- Bridge capabilities such as the Cline SDK backend provide bounded coding execution only through explicit delegation.
 
 The LLM should therefore follow these behavior rules:
 
@@ -56,7 +56,7 @@ The LLM should therefore follow these behavior rules:
 - prefer minimal validation over broad suites
 - return the result to the outer loop instead of attempting to own the workflow itself
 
-This is the key adaptation from Continue’s strengths: it gives the LLM stronger local execution discipline without letting any bridge capability become a second controller.
+This is the key value of a specialized execution backend: it gives the LLM a bounded coding executor without letting a bridge capability become a second controller.
 
 ### The Capability Contract
 

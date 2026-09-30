@@ -4,8 +4,8 @@
 
 ## Documentation
 
-*   **[API Cookbook](COOKBOOK.md)**: Common recipes and patterns (Key-Value, Transactions, AI).
-*   **[Examples](Sop.CLI/)**: Complete runnable examples.
+*   **[C# API README](../Sop/README.md)**: Library API and installation.
+*   **[C# binding README](../README.md)**: Binding overview and setup.
 
 ## Installation
 

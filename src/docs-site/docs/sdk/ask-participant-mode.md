@@ -285,6 +285,6 @@ Do not use it to turn SOP capabilities into controllers. The supported model is 
 
 ## Related Pages
 
-- [Continue Facade Architecture](./continue-facade-architecture)
+- [IDE Copilot Backends](./ide-copilot-backend)
 - [Workflow Architecture](./workflow-architecture)
 - [SDK Overview](./intro)

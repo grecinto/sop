@@ -29,7 +29,7 @@ The SDK provides:
 - **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
 - **Phase + domain token efficiency**: Structured phases and domain-aware tool surfaces keep the active prompt focused, reduce irrelevant tool exposure, and cut wasted retry turns without falling back to rigid routing
 - **Multi-language coding workflows**: Shared readers/analyzers and workflow/script generators support Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular
-- **Ask as Participant**: Use AI Studio Ask as a bounded participant through typed in-process or HTTP contracts, including integrations with Continue-like agents
+- **Ask as Participant**: Use AI Studio Ask as a bounded participant through typed in-process or HTTP contracts, including integrations with external agent controllers
 - **Undo and Restore**: Session-aware, workstream-based change history with natural language search and restore support
 
 ## Why this matters for AI platforms
@@ -67,6 +67,6 @@ For a customer-facing explanation of why this matters competitively, read [Why A
 - Explore the [AI Database Platform](./ai-database)
 - Read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage)
 - Understand the [Workflow Architecture](./workflow-architecture) - dynamic phases, workstreams, and the Ask pipeline execution model
-- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue connects to AI Studio as an editor-side companion or participant
+- Read about [IDE Copilot Backends](./ide-copilot-backend) - how SOP Ask delegates bounded coding work to its configured backend, with Cline SDK as the default
 - Follow the [Ask Participant Mode](./ask-participant-mode) guide for concrete embedding, HTTP, and NDJSON streaming examples
 - Read about [Undo and Restore](./undo-system) - session-aware workstream history, search, and recovery

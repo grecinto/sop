@@ -1310,7 +1310,7 @@ Respond with JSON:
 
 ### Overview
 
-Work streams must handle failures gracefully and detect infinite loops. See [PLANNING_FIRST_LLM_ORCHESTRATION.md](./PLANNING_FIRST_LLM_ORCHESTRATION.md#implementation-details-handling-critical-gaps) for complete implementation details covering all 7 critical gaps:
+Work streams must handle failures gracefully and detect infinite loops. See [PLANNING_FIRST_LLM_ORCHESTRATION.md](ASK_V2_ARCHITECTURE.md) for complete implementation details covering all 7 critical gaps:
 
 1. **Phase Completion Criteria** - Phase tools signal completion
 2. **Handoff vs. Path Priority** - Checkpoint-based priority
@@ -1457,9 +1457,9 @@ This prevents trying the same failing pattern in multiple streams.
 
 ## Related Documentation
 
-- [SIMPLE_ADAPTIVE_PHASE_ROUTING.md](./SIMPLE_ADAPTIVE_PHASE_ROUTING.md) - Phase routing with heuristics
+- [SIMPLE_ADAPTIVE_PHASE_ROUTING.md](PHASE_SYSTEM_ARCHITECTURE.md) - Phase routing with heuristics
 - [USER_INTERJECTION_QUEUE_DESIGN.md](./USER_INTERJECTION_QUEUE_DESIGN.md) - Initial queue design (superseded by this)
-- [PHASE_ROUTING_ANALYSIS.md](./PHASE_ROUTING_ANALYSIS.md) - Handoff vs. adaptive classification
+- [PHASE_ROUTING_ANALYSIS.md](PHASE_SYSTEM_ARCHITECTURE.md) - Handoff vs. adaptive classification
 
 ---
 

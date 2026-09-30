@@ -231,7 +231,7 @@ bulk_add - Insert multiple items
 - **HTTP Endpoints**: Auto-validated requests against OpenAPI spec
 - **Documentation**: Swagger UI with interactive testing
 
-See [ai/agent/README_API.md](../agent/README_API.md) for complete API documentation.
+See [Agent API](agent/README_API.md) for complete API documentation.
 
 ---
 

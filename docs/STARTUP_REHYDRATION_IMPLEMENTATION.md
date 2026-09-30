@@ -45,7 +45,7 @@ INFO: Paused workstreams available
 ## Architecture
 
 ### 1. Persistence Hook
-**File:** [lib/sop/ai/agent/copilot_executor.go](lib/sop/ai/agent/copilot_executor.go#L309-L314)
+**File:** [lib/sop/ai/agent/copilot_executor.go](../lib/sop/ai/agent/copilot_executor.go#L309-L314)
 
 ```go
 // Hook up automatic persistence on STM batch commits
@@ -57,10 +57,10 @@ stmStore.SetSessionStatePersister(func(persistCtx context.Context, btreeInstance
 })
 ```
 
-**Trigger:** Every 30 seconds when STM batches episodes ([lib/sop/ai/memory/stm_store.go:254](lib/sop/ai/memory/stm_store.go#L254))
+**Trigger:** Every 30 seconds when STM batches episodes ([lib/sop/ai/memory/stm_store.go:254](../lib/sop/ai/memory/stm_store.go#L254))
 
 ### 2. Startup Rehydration
-**File:** [lib/sop/ai/agent/copilot_executor.go](lib/sop/ai/agent/copilot_executor.go#L291-L307)
+**File:** [lib/sop/ai/agent/copilot_executor.go](../lib/sop/ai/agent/copilot_executor.go#L291-L307)
 
 ```go
 // Rehydrate session memory from persisted workstream state
@@ -75,7 +75,9 @@ if a.service != nil && a.service.session != nil && a.service.session.Memory != n
             reminder := a.service.session.Memory.FormatPausedWorkStreamsReminder()
             if reminder != "" {
                 log.Info("CopilotAgent: Paused workstreams available", "reminder", reminder)
-                // TODO: Send reminder to user via chat UI when available
+                if sendEvent, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && sendEvent != nil {
+                    sendEvent("content", reminder)
+                }
             }
         }
     }
@@ -90,7 +92,7 @@ if a.service != nil && a.service.session != nil && a.service.session.Memory != n
 - User can always access via `list_workstreams` tool
 
 ### 3. Persistence Implementation
-**File:** [lib/sop/ai/agent/memory_shortterm.go](lib/sop/ai/agent/memory_shortterm.go#L672-L725)
+**File:** [lib/sop/ai/agent/memory_shortterm.go](../lib/sop/ai/agent/memory_shortterm.go#L672-L725)
 
 **Persist:**
 - Serializes threads, phase state, artifacts to B-tree
@@ -132,7 +134,7 @@ if a.service != nil && a.service.session != nil && a.service.session.Memory != n
 
 ## Testing
 
-**Test File:** [lib/sop/ai/agent/startup_rehydration_test.go](lib/sop/ai/agent/startup_rehydration_test.go)
+**Test File:** [lib/sop/ai/agent/startup_rehydration_test.go](../lib/sop/ai/agent/startup_rehydration_test.go)
 
 ### Test Coverage:
 1. ✅ `TestStartupRehydrationFlow` - Full persist → restart → rehydrate → resume cycle
@@ -200,13 +202,13 @@ if a.service != nil && a.service.session != nil && a.service.session.Memory != n
 
 ## Files Modified
 
-1. ✅ [lib/sop/ai/agent/copilot_executor.go](lib/sop/ai/agent/copilot_executor.go) - Startup rehydration + persistence hook
-2. ✅ [lib/sop/ai/agent/startup_rehydration_test.go](lib/sop/ai/agent/startup_rehydration_test.go) - Comprehensive test suite (NEW)
+1. ✅ [lib/sop/ai/agent/copilot_executor.go](../lib/sop/ai/agent/copilot_executor.go) - Startup rehydration + persistence hook
+2. ✅ [lib/sop/ai/agent/startup_rehydration_test.go](../lib/sop/ai/agent/startup_rehydration_test.go) - Comprehensive test suite (NEW)
 
 ## Files Already Implemented (Used)
 
-1. ✅ [lib/sop/ai/agent/memory_shortterm.go](lib/sop/ai/agent/memory_shortterm.go) - Persist/Rehydrate methods (672-727)
-2. ✅ [lib/sop/ai/memory/stm_store.go](lib/sop/ai/memory/stm_store.go) - SetSessionStatePersister hook (281-288)
+1. ✅ [lib/sop/ai/agent/memory_shortterm.go](../lib/sop/ai/agent/memory_shortterm.go) - Persist/Rehydrate methods (672-727)
+2. ✅ [lib/sop/ai/memory/stm_store.go](../lib/sop/ai/memory/stm_store.go) - SetSessionStatePersister hook (281-288)
 
 ## Verification Steps
 

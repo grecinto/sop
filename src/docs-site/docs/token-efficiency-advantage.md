@@ -6,7 +6,7 @@ sidebar_position: 5
 
 AI Studio is designed to make each turn **context-dense** instead of repeatedly paying prompt cost for the entire assistant surface.
 
-That gives it a real architectural advantage over coding assistants that keep a broad app-layer wrapper active on every turn. In many multi-step tasks, that should mean lower token burn than Cursor-style or Continue-style controller experiences.
+That gives it an architectural advantage over broad app-layer controller patterns. In multi-step tasks, SOP Ask keeps the outer control loop focused while the Cline SDK backend handles only its bounded coding slice.
 
 The important qualifier is that this is an architectural claim, not a universal benchmark. Exact savings depend on the model, provider, and task shape.
 
@@ -92,13 +92,11 @@ The difference is not that AI Studio has a smaller feature set. The difference i
 | Context assembly | Broad context can accumulate across turns | High-signal context is prioritized and trimmed |
 | Prompt reuse | Volatile context can disrupt caching | Stable prompt prefix improves cache friendliness |
 
-This is why we believe AI Studio can be more token-efficient than many Cursor-style and Continue-style controller experiences for complex coding workflows.
+This is why we expect the Ask-owned workflow to reduce repeated orchestration context in complex coding tasks. Exact token use depends on provider, model, and task.
 
-## How Continue Fits Into This
+## How Cline Fits Into This
 
-Continue is still useful as an editor-side companion.
-
-AI Studio keeps the Ask pipeline as the orchestrator, while Continue acts as an IDE surface and delegated worker when needed. This combines editor ergonomics with focused, efficient task execution.
+The Data Manager sends through SOP Ask. Ask keeps orchestration, memory, policy, and workstream state; when appropriate it delegates one bounded coding task to the daemon-managed Cline SDK backend. This avoids a second production chat controller while allowing Cline's agent loop to focus on the coding task.
 
 ## Why Customers Should Care
 
@@ -115,5 +113,5 @@ For customers evaluating coding assistants, this means the relevant question is 
 
 - [Workflow Architecture](./sdk/workflow-architecture)
 - [Coding Workflows](./user-guide/coding-workflows)
-- [Continue Facade Architecture](./sdk/continue-facade-architecture)
+- [IDE Copilot Backends](./sdk/ide-copilot-backend)
 - [AI Studio Memory Advantage](./ai-studio-memory-advantage)

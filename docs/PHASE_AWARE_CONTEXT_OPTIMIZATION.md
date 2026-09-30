@@ -1,8 +1,10 @@
 # Phase-Aware Context Optimization
 
 **Date**: 2026-08-31  
-**Status**: ✅ Implemented  
+**Status**: Historical implementation snapshot; validate current budgets and composition against source and tests.
 **Problem**: Execution phase context trimmed from 9704→2600 chars, removing critical instructions  
+
+The recorded character counts, metrics, and manual scenarios below describe the original optimization pass, not current runtime measurements.
 
 ---
 

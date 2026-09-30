@@ -245,7 +245,7 @@ This keeps responsibilities clear:
 - the external system remains a tool substrate or delegated worker
 - no external agent becomes the workflow controller
 
-This pattern is domain-agnostic. It works for coding integrations like Continue and can also be extended to other agent surfaces as long as they can describe their capabilities as data.
+This pattern is domain-agnostic. Coding tasks can delegate to the default Cline SDK backend or another configured worker, provided the backend reports its capabilities through the shared contract.
 
 ## Ask as Participant
 
@@ -263,7 +263,7 @@ The supported composition is:
 3. AI Studio Ask runs its normal routing, capability selection, ReAct loop, and memory access.
 4. AI Studio returns a structured result to the outer controller.
 
-This lets you use Continue or another controller as the outer layer while AI Studio continues to manage the delegated turn.
+This lets an external controller act at the boundary while AI Studio Ask manages its own delegated turn.
 
 For concrete embedding and streaming examples, see [Ask Participant Mode](./ask-participant-mode).
 

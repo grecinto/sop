@@ -322,7 +322,7 @@ User: "Deploy the updated API to production"
 - [TIER2B_PROGRESSIVE_ESCALATION_IMPLEMENTATION.md](./TIER2B_PROGRESSIVE_ESCALATION_IMPLEMENTATION.md) - Progressive retry system
 - [RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md) - Current retry/cognition architecture
 - [ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md) - Current Ask pipeline architecture
-- [ARCHITECTURE_PATTERNS.md](./ARCHITECTURE_PATTERNS.md) - Participant Pattern
-- [PLANNING_FIRST_LLM_ORCHESTRATION.md](./PLANNING_FIRST_LLM_ORCHESTRATION.md) - Phase succession design
+- [ARCHITECTURE_PATTERNS.md](WORKFLOWS.md) - Participant Pattern
+- [PLANNING_FIRST_LLM_ORCHESTRATION.md](ASK_V2_ARCHITECTURE.md) - Phase succession design
 - [WORKFLOWS.md](./WORKFLOWS.md) - Workflow architecture
-- [/memories/repo/participant-pattern-not-controller.md](/memories/repo/participant-pattern-not-controller.md) - Architecture constraints
+- [/memories/repo/participant-pattern-not-controller.md](WORKFLOWS.md) - Architecture constraints

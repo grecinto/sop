@@ -4,6 +4,8 @@
 **Status**: PROPOSED  
 **Goal**: Strengthen provider support and model compatibility without weakening Ask ownership, provider-owned loop boundaries, or the participant-pattern architecture
 
+> Historical comparative analysis: references to Continue below describe the former adapter baseline, not the current copilot backend. Cline SDK is the selected bounded coding backend; provider-specific work should follow SOP's Ask/provider-owned loop architecture.
+
 ## 1. GPT / OpenAI Assessment
 
 This section preserves the GPT / OpenAI comparative analysis so it remains part of the design record.

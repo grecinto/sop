@@ -1,140 +1,33 @@
-# Fallback Provider Configuration Guide
+# Provider Fallback
 
-## Overview
+SOP can construct an ordered provider chain for generation. The configured primary is attempted first, followed by available fallback providers. In daemon Ask flows, provider-keyed credentials can be used to build the chain; legacy primary/fallback settings remain supported for compatibility.
 
-The AI Studio now supports automatic LLM provider fallback. If your primary provider fails (rate limits, outages, API errors), requests automatically fail over to a backup provider.
+## Configuration
 
-## How to Configure
+Configure providers and credentials using the AI settings/setup flow or the deployment's daemon configuration. Keep provider secrets out of source control and logs. In local daemon mode, the UI encrypts provider keys through the daemon and stores opaque encrypted values separately from non-secret settings; do not depend on the old plaintext `localStorage.sop_ai_config` schema. See [AI Studio](AI_STUDIO.md) for local secret handling.
 
-### 1. Open Environment Settings
+The provider chain is ordered. An explicit provider/model request takes precedence where the runtime supports it; otherwise, the daemon resolves the configured eligible providers. See [Retry Orchestration State](RETRY_ORCHESTRATION_STATE.md) for the broader Ask retry policy and [LLM Enhancement Plan](LLM_ENHANCEMENT_PLAN.md) for provider work that remains proposed.
 
-Click the **HDD icon** (⚙️) in the AI chat interface to open Environment Settings.
+## Runtime Behavior
 
-### 2. Configure Primary Provider
+`FallbackGenerator` ([source](../lib/sop/ai/generator/fallback.go)) uses these rules:
 
-- **Provider / Model**: Select your primary LLM (e.g., `Anthropic (Claude 3.5 Sonnet)`)
-- **API Key**: Enter your API key
-- **Base URL**: (Optional) Custom endpoint
+- It attempts the primary provider, then fallback providers in configured order.
+- Each provider attempt has a 90-second timeout derived from the caller context.
+- Network errors, timeouts, connection failures, HTTP 5xx errors, rate limits, quota/capacity errors, and unavailable/maintenance errors are retryable.
+- Authentication and request-validation errors such as 400, 401, 403, invalid requests, or a missing API key are not retried on another provider.
+- After three consecutive retryable failures, a provider's circuit opens for five minutes. A successful call resets its failure count and closes the circuit.
+- Cancellation and deadlines from the caller context are preserved.
 
-Click **Test Connection** to verify.
+The retry classification is based on the provider error text. Treat it as a bounded resilience mechanism, not a guarantee that every provider error is classified correctly.
 
-### 3. Configure Fallback Provider (Optional)
+## Validation and Troubleshooting
 
-Scroll down to the **"Fallback Provider (Optional)"** section:
+Test each configured provider independently before relying on fallback. Then test a transient failure and confirm the next configured provider succeeds. Do not expect a bad credential or malformed request to fall through automatically; correct the provider configuration first.
 
-- **Provider / Model**: Select a different LLM (e.g., `OpenAI (GPT-4o)`)
-- **API Key**: Enter the fallback provider's API key
-- **Base URL**: (Optional) Custom endpoint
+Focused tests for provider ordering, retry classification, circuit state, and Ask fallback are in the generator and daemon Ask packages. From the repository root, run:
 
-Click **Test Fallback** to verify.
-
-### 4. Save Settings
-
-Click **Save & Close**. Your configuration is saved to browser localStorage.
-
-## Example Configuration
-
+```sh
+go test ./lib/sop/ai/generator/...
+go test ./lib/sop/cmd/sop-daemon
 ```
-Primary: Anthropic (Claude 3.5 Sonnet)
-API Key: sk-ant-api03-xxx
-
-Fallback: OpenAI (GPT-4o)
-API Key: sk-xxx
-```
-
-## How It Works
-
-When you send a request:
-1. AI Studio tries the **primary provider** first
-2. If it fails with a retryable error (429 rate limit, 503 service unavailable, timeouts), it automatically tries the **fallback provider**
-3. If the fallback succeeds, you get a response
-4. If both fail, you see an error
-
-### Circuit Breaker
-
-The system includes a circuit breaker:
-- After **3 consecutive failures**, the provider circuit "opens" (disabled for 5 minutes)
-- This prevents hammering a failing provider
-- After 5 minutes, the circuit automatically closes and retries
-
-### Retryable vs Non-Retryable Errors
-
-**Retryable** (will use fallback):
-- 429 Too Many Requests (rate limit)
-- 503 Service Unavailable
-- 502 Bad Gateway
-- 504 Gateway Timeout
-- Network timeouts
-- "quota exceeded" errors
-
-**Non-retryable** (will NOT use fallback):
-- 401 Unauthorized (bad API key)
-- 403 Forbidden
-- 400 Bad Request (malformed request)
-
-## Best Practices
-
-1. **Use different providers** for primary and fallback (e.g., Anthropic + OpenAI)
-   - This protects against provider-specific outages
-   - Different rate limit pools
-
-2. **Test both connections** before saving
-   - Ensures both API keys are valid
-   - Confirms network connectivity
-
-3. **Monitor costs** if using multiple providers
-   - Fallback activates automatically on failures
-   - Check your provider dashboards periodically
-
-4. **Keep fallback optional**
-   - Only configure if you need high availability
-   - Single provider works fine for most use cases
-
-## localStorage Schema
-
-Configuration is stored in `localStorage.sop_ai_config`:
-
-```json
-{
-  "brain_provider": "anthropic",
-  "brain_model": "claude-3-5-sonnet-20241022",
-  "brain_api_key": "sk-ant-api03-xxx",
-  "brain_url": "",
-  "fallback_provider": "chatgpt",
-  "fallback_model": "gpt-4o",
-  "fallback_api_key": "sk-xxx",
-  "fallback_url": ""
-}
-```
-
-## Technical Details
-
-- Fallback timeout: **90 seconds** per provider
-- Circuit breaker: Opens after **3 failures**, closes after **5 minutes**
-- HTTP headers: `X-LLM-Fallback-Provider`, `X-LLM-Fallback-API-Key`, `X-LLM-Fallback-Model`, `X-LLM-Fallback-URL`
-- Backend: Uses `FallbackGenerator` from `lib/sop/ai/generator/fallback.go`
-
-## Troubleshooting
-
-### Fallback not activating
-
-- Check that both providers have valid API keys (Test Connection)
-- Verify the error is retryable (check browser console)
-- Circuit breaker may be open (wait 5 minutes)
-
-### Both providers failing
-
-- Check API key validity
-- Check account quotas (rate limits, billing)
-- Check network connectivity
-- Review error messages in browser console
-
-### Want to disable fallback
-
-Set the **Fallback Provider** dropdown to **"None (No Fallback)"** and save.
-
-## Related Documentation
-
-- [FALLBACK.md](../../../lib/sop/ai/generator/FALLBACK.md) - FallbackGenerator API reference
-- [AI_STUDIO.md](../AI_STUDIO.md) - AI Studio architecture
-- [ai-studio-memory-advantage.md](../src/docs-site/docs/ai-studio-memory-advantage.md) - Memory architecture advantages

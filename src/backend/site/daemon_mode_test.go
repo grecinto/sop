@@ -114,6 +114,11 @@ func TestDaemonModeAccessControl(t *testing.T) {
 //
 // Breaking this will cause the UI to connect to HQ instead of daemon.
 func TestDaemonModeTemplateData(t *testing.T) {
+	if !runInFreshSiteTestProcess(t) {
+		return
+	}
+	configureFreshFirstRunState(t)
+
 	tests := []struct {
 		name                  string
 		path                  string
@@ -171,8 +176,9 @@ func TestDaemonModeTemplateData(t *testing.T) {
 
 			// Verify custom daemon URL is in the response when provided
 			if tt.expectedDaemonURL != sopbackend.DefaultDaemonURL {
-				if !strings.Contains(body, tt.expectedDaemonURL) {
-					t.Errorf("Expected custom daemon URL %s in response", tt.expectedDaemonURL)
+				escapedURL := strings.ReplaceAll(tt.expectedDaemonURL, "/", `\/`)
+				if !strings.Contains(body, escapedURL) {
+					t.Errorf("Expected escaped custom daemon URL %s in response", escapedURL)
 				}
 			}
 		})
