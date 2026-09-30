@@ -835,6 +835,7 @@
             const localMode = getChatRuntimeMode() === 'local';
             clineBtn.style.display = localMode && !isBusy && hasText ? 'inline-flex' : 'none';
             clineBtn.disabled = !localMode || isBusy || !hasText;
+            clineBtn.title = localMode ? 'Run this task with Cline SDK' : 'Cline is available in local daemon mode';
         }
 
         const icon = sendBtn.querySelector('.chat-send-icon');
@@ -3209,7 +3210,7 @@
             }
             taskID = payload.task?.id || payload.task?.delegation_id || '';
             if (!taskID) throw new Error('Cline task did not return a task id');
-            appendChatMessage('ai', `Cline task started: ${taskID}`);
+            appendChatMessage('ai', `Cline SDK task started: ${taskID}`);
 
             while (true) {
                 const statusResponse = await localRuntimeFetch(`/api/cline/tasks/${encodeURIComponent(taskID)}`, {
