@@ -876,6 +876,16 @@
         return lastId;
     }
 
+    function updateChatMessage(msgId, text) {
+        if (!msgId) return false;
+        const message = document.getElementById(msgId);
+        if (!message) return false;
+        message.innerHTML = renderChatContent(String(text || ''));
+        const history = document.getElementById('chat-history');
+        if (history) history.scrollTop = history.scrollHeight;
+        return true;
+    }
+
     function handleFeedback(e, msgId, type) {
         // Visual feedback
         const btn = e.target;
