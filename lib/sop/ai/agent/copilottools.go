@@ -181,11 +181,35 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	log.Warn("registerTools completed with feature-flag-driven registration", "tool_count", len(a.registry.List()))
 }
 
+// continueDelegatedCodingExecutionTools lists coding execution-phase tools that mutate files
+// directly. When a session has a capable Continue worker connected, these must stay hidden so
+// the daemon LLM is forced through delegate_continue_task instead of patching files itself.
+var continueDelegatedCodingExecutionTools = map[string]bool{
+	"execution_preview_patch":          true,
+	"execution_apply_patch":            true,
+	"execution_apply_multi_file_patch": true,
+}
+
+// continueWorkerCapableOfEdit reports whether the active Ask session has a Continue worker
+// registered that advertises edit capability, per the "continue_worker_capable_edit" session
+// variable set by the daemon bridge before delegating into Ask.
+func continueWorkerCapableOfEdit(ctx context.Context) bool {
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil || payload.Variables == nil {
+		return false
+	}
+	capable, _ := payload.Variables["continue_worker_capable_edit"].(bool)
+	return capable
+}
+
 // registerCapabilityTools iterates through all registered capabilities and registers
 // their exposed tools into the agent's tool registry. This ensures all capability-provided
 // tools flow through the ReAct loop naturally with server-side continuation support.
-func shouldRegisterCapabilityTool(cap capabilities.Capability, toolName string) bool {
+func shouldRegisterCapabilityTool(ctx context.Context, cap capabilities.Capability, toolName string) bool {
 	if cap == nil {
+		return false
+	}
+	if continueDelegatedCodingExecutionTools[toolName] && continueWorkerCapableOfEdit(ctx) {
 		return false
 	}
 	if toolName != "execute_local_command" {
@@ -305,7 +329,7 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 			toolName := toolDef.Name
 			capID := cap.ID()
 
-			if !shouldRegisterCapabilityTool(capability, toolName) {
+			if !shouldRegisterCapabilityTool(ctx, capability, toolName) {
 				continue
 			}
 			if _, exists := a.registry.Get(toolName); exists {

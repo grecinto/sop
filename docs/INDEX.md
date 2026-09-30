@@ -135,7 +135,6 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-08-29.
 
 | Document | Description |
 |----------|-------------|
-| [DESKTOP_APP.md](DESKTOP_APP.md) | Desktop application architecture |
 | [LOCAL_RAG_APP_STORE_CONCEPT.md](LOCAL_RAG_APP_STORE_CONCEPT.md) | Local RAG app store concept |
 | [CLOUDFLARE_PRIVATE_DOWNLOADS.md](CLOUDFLARE_PRIVATE_DOWNLOADS.md) | Private download infrastructure |
 

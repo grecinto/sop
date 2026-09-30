@@ -2991,7 +2991,6 @@ Many commercial products use this pattern:
 
 - [CLOUDFLARE_PRIVATE_DOWNLOADS.md](CLOUDFLARE_PRIVATE_DOWNLOADS.md) - Signed URL guide (for community binaries)
 - [PAYMENTS.md](PAYMENTS.md) - Subscription tier definitions
-- [DESKTOP_APP.md](DESKTOP_APP.md) - Desktop app binary packaging
 
 **Key Takeaway**: GitHub Releases provides free, reliable, global binary distribution for official daemon binaries. Community binaries still use R2 for access control.
 
