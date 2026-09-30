@@ -21,6 +21,8 @@ import (
 
 const clineExecutableName = "cline"
 
+const maxClineInlineDiffBytes = 32 * 1024
+
 type clineWorkerBackend struct {
 	shellSessions *ptyShellSessionManager
 	delegationTracker
@@ -501,12 +503,19 @@ func collectClineWorkspaceChanges(ctx context.Context, workspaceRoot string, bef
 		} else if _, existsAfter := after[path]; !existsAfter {
 			operation = "delete"
 		}
+		diffDelta := clineWorkspaceDiff(ctx, workspaceRoot, path)
+		metadata := map[string]any{"source": "daemon_workspace_diff"}
+		if len(diffDelta) > maxClineInlineDiffBytes {
+			metadata["diff_truncated"] = true
+			metadata["diff_bytes"] = len(diffDelta)
+			diffDelta = diffDelta[:maxClineInlineDiffBytes]
+		}
 		modified = append(modified, ideworker.ModifiedFile{
 			FilePath:      path,
 			CRUDOperation: operation,
-			DiffDelta:     clineWorkspaceDiff(ctx, workspaceRoot, path),
+			DiffDelta:     diffDelta,
 			DiffFormat:    "unified",
-			Metadata:      map[string]any{"source": "daemon_workspace_diff"},
+			Metadata:      metadata,
 		})
 	}
 	return modified
