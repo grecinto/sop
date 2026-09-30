@@ -52,6 +52,10 @@ func (b *clineWorkerBackend) InspectSession(ctx context.Context, sessionID strin
 }
 
 func (b *clineWorkerBackend) ExecuteTask(ctx context.Context, req ideworker.TaskRequest) (string, error) {
+	return b.executeTask(ctx, req, nil)
+}
+
+func (b *clineWorkerBackend) executeTask(ctx context.Context, req ideworker.TaskRequest, progress func(string)) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -68,7 +72,11 @@ func (b *clineWorkerBackend) ExecuteTask(ctx context.Context, req ideworker.Task
 		return "", fmt.Errorf("start Cline shell session: %w", err)
 	}
 	before := snapshotClineWorkspace(ctx, req.WorkspaceRoot)
-	output, stillRunning, err := b.shellSessions.RunWithContext(ctx, sessionID, command, 12*time.Hour, nil)
+	output, stillRunning, err := b.shellSessions.RunWithContext(ctx, sessionID, command, 12*time.Hour, func(chunk string) {
+		if progress != nil {
+			progress(strings.TrimSpace(chunk))
+		}
+	})
 	if err != nil {
 		return "", fmt.Errorf("run Cline task: %w", err)
 	}
@@ -114,7 +122,19 @@ func (b *clineWorkerBackend) StartTask(ctx context.Context, req ideworker.TaskRe
 	b.sessions[id] = sessionID
 	b.mu.Unlock()
 	go func() {
-		result, err := b.ExecuteTask(ctx, req)
+		result, err := b.executeTask(ctx, req, func(message string) {
+			if message == "" {
+				return
+			}
+			if len(message) > 512 {
+				message = message[len(message)-512:]
+			}
+			b.mu.Lock()
+			record.Progress = "running"
+			record.Message = message
+			record.LastUpdated = time.Now()
+			b.mu.Unlock()
+		})
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if record.Cancelled {
