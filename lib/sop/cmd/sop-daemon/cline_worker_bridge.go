@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
@@ -23,7 +24,9 @@ const clineExecutableName = "cline"
 type clineWorkerBackend struct {
 	shellSessions *ptyShellSessionManager
 	delegationTracker
-	sessions map[string]string
+	sessions       map[string]string
+	sessionLocksMu sync.Mutex
+	sessionLocks   map[string]*sync.Mutex
 }
 
 type clineRunResult struct {
@@ -68,6 +71,9 @@ func (b *clineWorkerBackend) executeTask(ctx context.Context, req ideworker.Task
 	if sessionID == "" {
 		sessionID = "cline-default"
 	}
+	sessionLock := b.sessionLock(sessionID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 	if _, err := b.shellSessions.EnsureSession(sessionID, strings.TrimSpace(req.WorkspaceRoot)); err != nil {
 		return "", fmt.Errorf("start Cline shell session: %w", err)
 	}
@@ -98,6 +104,20 @@ func (b *clineWorkerBackend) executeTask(ctx context.Context, req ideworker.Task
 		log.Printf("cline execution history: %v", err)
 	}
 	return marshalClineExecutionResult(result), nil
+}
+
+func (b *clineWorkerBackend) sessionLock(sessionID string) *sync.Mutex {
+	b.sessionLocksMu.Lock()
+	defer b.sessionLocksMu.Unlock()
+	if b.sessionLocks == nil {
+		b.sessionLocks = make(map[string]*sync.Mutex)
+	}
+	if lock := b.sessionLocks[sessionID]; lock != nil {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	b.sessionLocks[sessionID] = lock
+	return lock
 }
 
 func (b *clineWorkerBackend) StartTask(ctx context.Context, req ideworker.TaskRequest) (ideworker.DelegationHandle, error) {
@@ -224,10 +244,12 @@ func clineExecutionSpec(req ideworker.TaskRequest) (string, func(), error) {
 	if hostPath == "" {
 		hostPath = "tools/cline-sdk-host/dist/host.js"
 	}
-	if !filepath.IsAbs(hostPath) {
-		if resolved, err := filepath.Abs(hostPath); err == nil {
-			hostPath = resolved
+	hostPath = resolveClineSDKHostPath(hostPath)
+	if info, err := os.Stat(hostPath); err != nil || info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("path is a directory")
 		}
+		return "", func() {}, fmt.Errorf("Cline SDK host is unavailable at %s: %w", hostPath, err)
 	}
 	payload := map[string]any{
 		"type":              "run",
@@ -239,6 +261,8 @@ func clineExecutionSpec(req ideworker.TaskRequest) (string, func(), error) {
 		"modelId":           req.Model,
 		"apiKey":            req.APIKey,
 		"baseUrl":           req.BaseURL,
+		"mcpUrl":            req.MCPURL,
+		"mcpBearerToken":    req.MCPBearerToken,
 		"mode":              clineSDKMode(req.Mode),
 		"guidance":          req.Guidance,
 		"enableCheckpoints": true,
@@ -271,6 +295,34 @@ func clineExecutionSpec(req ideworker.TaskRequest) (string, func(), error) {
 	}
 	cleanup := func() { _ = os.Remove(requestPath) }
 	return "node " + shellQuote(hostPath) + " < " + shellQuote(requestPath), cleanup, nil
+}
+
+func resolveClineSDKHostPath(configured string) string {
+	if filepath.IsAbs(configured) {
+		return configured
+	}
+	candidates := make([]string, 0, 8)
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, configured))
+		for parent := cwd; parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+			candidates = append(candidates, filepath.Join(filepath.Dir(parent), configured))
+		}
+	}
+	if executable, err := os.Executable(); err == nil {
+		executableDir := filepath.Dir(executable)
+		candidates = append(candidates, filepath.Join(executableDir, configured))
+		for parent := executableDir; parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+			candidates = append(candidates, filepath.Join(filepath.Dir(parent), configured))
+		}
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if resolved, err := filepath.Abs(candidate); err == nil {
+				return resolved
+			}
+		}
+	}
+	return configured
 }
 
 func validateClineWorkspaceRoot(workspaceRoot string) error {

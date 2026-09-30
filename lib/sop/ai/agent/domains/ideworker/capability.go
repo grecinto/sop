@@ -75,6 +75,8 @@ type TaskRequest struct {
 	Model          string
 	APIKey         string
 	BaseURL        string
+	MCPURL         string
+	MCPBearerToken string
 	RequestedPhase string
 	AvailableTools []string
 	PhaseTools     []string

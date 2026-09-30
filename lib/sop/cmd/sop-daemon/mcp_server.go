@@ -133,7 +133,7 @@ func mcpToolDefinitions() []any {
 		map[string]any{
 			"name":        "restore_undo_transaction",
 			"description": "Restore a canonical AI Studio undo transaction. This mutates workspace files and requires explicit confirmation.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "transaction_id": map[string]any{"type": "string"}, "confirm": map[string]any{"type": "boolean"}}, "required": []string{"workspace_root", "transaction_id", "confirm"}},
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "transaction_id": map[string]any{"type": "string"}, "confirm": map[string]any{"type": "boolean"}}, "required": []string{"workspace_root", "session_id", "transaction_id", "confirm"}},
 		},
 	}
 }
@@ -274,20 +274,35 @@ func mcpRestoreUndoTransaction(ctx context.Context, service *localRAGService, ar
 		return "", fmt.Errorf("restore requires explicit confirm=true")
 	}
 	sessionID, _ := arguments["session_id"].(string)
-	manager, err := getContinueUndoManager(firstNonEmpty(strings.TrimSpace(sessionID), "daemon"), workspaceRoot)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("session_id is required for restore authorization")
+	}
+	if service == nil {
+		return "", fmt.Errorf("AI Studio session service is unavailable")
+	}
+	snapshot, ok := service.ensureContinueSessionStore().Get(sessionID)
+	if !ok {
+		return "", fmt.Errorf("session %q was not found", sessionID)
+	}
+	requestedRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace_root: %w", err)
+	}
+	sessionRoot, err := filepath.Abs(strings.TrimSpace(snapshot.WorkspaceRoot))
+	if err != nil || strings.TrimSpace(snapshot.WorkspaceRoot) == "" || requestedRoot != sessionRoot {
+		return "", fmt.Errorf("workspace_root is not authorized for session %q", sessionID)
+	}
+	manager, err := getContinueUndoManager(sessionID, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("open undo history: %w", err)
 	}
 	if err := manager.RestoreTransaction(ctx, transactionID, codingworkflow.RestoreOptions{Mode: codingworkflow.RestoreFull, CreateBackup: true, VerifyHashes: true, ConfirmPrompt: true}); err != nil {
 		return "", fmt.Errorf("restore undo transaction: %w", err)
 	}
-	if service != nil && strings.TrimSpace(sessionID) != "" {
-		if snapshot, ok := service.ensureContinueSessionStore().Get(strings.TrimSpace(sessionID)); ok {
-			snapshot.Status = "stale"
-			snapshot.Message = "Workspace restored by AI Studio; refresh the Cline session before continuing."
-			service.ensureContinueSessionStore().Put(snapshot)
-		}
-	}
+	snapshot.Status = "stale"
+	snapshot.Message = "Workspace restored by AI Studio; refresh the Cline session before continuing."
+	service.ensureContinueSessionStore().Put(snapshot)
 	return fmt.Sprintf("restored undo transaction %s; associated Cline session is stale and must be refreshed", transactionID), nil
 }
 

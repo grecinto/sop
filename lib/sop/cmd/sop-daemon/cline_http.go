@@ -47,6 +47,18 @@ func clineTaskRequest(input clineHTTPExecuteRequest) ideworker.TaskRequest {
 	}
 }
 
+func populateClineMCPContext(r *http.Request, taskRequest *ideworker.TaskRequest) {
+	if r == nil || taskRequest == nil {
+		return
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1:9090"
+	}
+	taskRequest.MCPURL = "http://" + host + "/mcp"
+	taskRequest.MCPBearerToken = extractBearerToken(r.Header.Get("Authorization"))
+}
+
 func (s *localRAGService) handleClineExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -62,7 +74,9 @@ func (s *localRAGService) handleClineExecute(w http.ResponseWriter, r *http.Requ
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	result, err := s.clineBackend.ExecuteTask(r.Context(), clineTaskRequest(input))
+	taskRequest := clineTaskRequest(input)
+	populateClineMCPContext(r, &taskRequest)
+	result, err := s.clineBackend.ExecuteTask(r.Context(), taskRequest)
 	if err != nil {
 		respondJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -90,7 +104,9 @@ func (s *localRAGService) handleClineTaskStart(w http.ResponseWriter, r *http.Re
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	handle, err := s.clineBackend.StartTask(r.Context(), clineTaskRequest(input))
+	taskRequest := clineTaskRequest(input)
+	populateClineMCPContext(r, &taskRequest)
+	handle, err := s.clineBackend.StartTask(r.Context(), taskRequest)
 	if err != nil {
 		respondJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -132,9 +148,7 @@ func (s *localRAGService) handleClineTaskCancel(w http.ResponseWriter, r *http.R
 		return
 	}
 	taskID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/cline/tasks/"), "/")
-	if strings.HasSuffix(taskID, "/cancel") {
-		taskID = strings.TrimSuffix(taskID, "/cancel")
-	}
+	taskID = strings.TrimSuffix(taskID, "/cancel")
 	if taskID == "" || strings.Contains(taskID, "/") {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "task id is required"})
 		return
