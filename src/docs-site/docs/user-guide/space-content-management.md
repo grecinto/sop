@@ -8,7 +8,7 @@ description: Organize knowledge in Spaces, manage categories, and vectorize cont
 
 ## Overview
 
-Spaces in AI Studio are semantic memory systems that organize knowledge through **nested categories** and **vector embeddings**. This guide covers best practices for managing content, categories, and vectorization.
+Spaces in Northstar AI are semantic memory systems that organize knowledge through **nested categories** and **vector embeddings**. This guide covers best practices for managing content, categories, and vectorization.
 
 ## Core Concepts
 

@@ -33,7 +33,7 @@ const sidebars: SidebarsConfig = {
     'token-efficiency-advantage',
     {
       type: 'category',
-      label: 'SDK Documentation',
+      label: 'Joltrin SDK',
       items: [
         'sdk/intro',
         'sdk/history',

@@ -1,15 +1,15 @@
 # Undo and Restore
 
-This document explains how AI Studio tracks, searches, and restores coding changes through session-aware workstreams.
+This document explains how Northstar AI tracks, searches, and restores coding changes through session-aware workstreams.
 
 ## Overview
 
-AI Studio organizes coding work around two connected ideas:
+Northstar AI organizes coding work around two connected ideas:
 
 - a **session**, which holds the broader conversation and runtime context
 - a **workstream**, which carries one focused line of work through its phases
 
-Undo and restore are attached to that workstream history. As a workstream edits files, AI Studio records enough information to make those changes searchable and restorable later.
+Undo and restore are attached to that workstream history. As a workstream edits files, Northstar AI records enough information to make those changes searchable and restorable later.
 
 This gives you a practical recovery system for real coding work:
 
@@ -20,7 +20,7 @@ This gives you a practical recovery system for real coding work:
 
 ## How It Fits the Product Model
 
-Undo is part of the same runtime model that drives the rest of AI Studio.
+Undo is part of the same runtime model that drives the rest of Northstar AI.
 
 ### Session Context
 
@@ -44,7 +44,7 @@ Each undoable change set is stored as a restore record with its own internal ide
 
 ## What Gets Stored
 
-When AI Studio makes file changes during a workstream, it stores:
+When Northstar AI makes file changes during a workstream, it stores:
 
 - metadata about the change
 - per-file restore data
@@ -75,7 +75,7 @@ This layer supports:
 
 ### Layer 2: File Restore Data
 
-For each changed file, AI Studio stores the restore data needed to reconstruct or reverse a prior state.
+For each changed file, Northstar AI stores the restore data needed to reconstruct or reverse a prior state.
 
 The current implementation focuses on per-file restore payloads and change summaries rather than a heavyweight full-history system.
 
@@ -138,7 +138,7 @@ Those signals help organize undo history by meaningful repository structure inst
 
 ## Workstream Review History
 
-Undo records are also stored in a review-friendly structure so AI Studio can present prior work in a way that follows how coding tasks were actually carried out.
+Undo records are also stored in a review-friendly structure so Northstar AI can present prior work in a way that follows how coding tasks were actually carried out.
 
 In practice, this supports views such as:
 
@@ -181,11 +181,11 @@ That gives your integration:
 - searchable restore history
 - file-aware rollback behavior
 - semantic indexing for prior changes
-- continuity with the rest of AI Studio's runtime model
+- continuity with the rest of Northstar AI's runtime model
 
 ## Summary
 
-AI Studio's undo system is best understood as **session-aware, workstream-based change recovery**.
+Northstar AI's undo system is best understood as **session-aware, workstream-based change recovery**.
 
 It keeps restore history connected to the actual work that produced it, makes that history searchable, and supports safe recovery when part or all of a coding task should be reversed.
 

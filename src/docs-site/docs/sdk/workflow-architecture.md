@@ -1,10 +1,10 @@
 # Workflow Architecture
 
-This document covers the current AI Studio workflow model: a dynamic, phase-capability system controlled by the Ask pipeline.
+This document covers the current Northstar AI workflow model: a dynamic, phase-capability system controlled by the Ask pipeline.
 
 ## Overview
 
-AI Studio's workflow model is built around phase capabilities. The system does this:
+Northstar AI's workflow model is built around phase capabilities. The system does this:
 
 1. **Classify the task** in the context of the current workstream
 2. **Select the most relevant phase capability** such as intake, investigation, planning, execution, review, or delivery
@@ -215,7 +215,7 @@ This allows the system to treat work as resumable execution, not a one-shot prom
 
 ## External Agent Integration
 
-The same phase-based architecture can connect external agents and tool surfaces while keeping the task connected to AI Studio.
+The same phase-based architecture can connect external agents and tool surfaces while keeping the task connected to Northstar AI.
 
 ### Metadata-Driven Participants
 
@@ -227,21 +227,21 @@ An external integration can describe itself in metadata:
 - request-scoped callable tool subsets
 - request-scoped hints for delegation
 
-AI Studio can then load that metadata into a capability and treat the remote system as a passive participant.
+Northstar AI can then load that metadata into a capability and treat the remote system as a passive participant.
 
 ### Thin Wrapper Capability
 
 The recommended pattern is a thin wrapper capability that:
 
 - ingests remote capability metadata
-- maps remote phases onto AI Studio phases
+- maps remote phases onto Northstar AI phases
 - exposes a bounded delegation tool when the remote system is itself an agent/orchestrator
 - forwards execution to the remote backend
 - returns control to the Ask pipeline after each bounded step
 
 This keeps responsibilities clear:
 
-- AI Studio remains the orchestrator
+- Northstar AI remains the orchestrator
 - the external system remains a tool substrate or delegated worker
 - no external agent becomes the workflow controller
 
@@ -253,17 +253,17 @@ The same runtime can also be reused under an external controller, but the intern
 
 This is a different boundary from the participant pattern inside Ask:
 
-- externally, AI Studio Ask may be one participant in a larger multi-agent system
-- within the delegated turn, AI Studio Ask remains the orchestrator of its own capabilities and tools
+- externally, Northstar AI Ask may be one participant in a larger multi-agent system
+- within the delegated turn, Northstar AI Ask remains the orchestrator of its own capabilities and tools
 
 The supported composition is:
 
-1. An outer agent decides a bounded AI Studio Ask turn is useful.
-2. The outer agent calls SOP through a typed request or participant HTTP endpoint.
-3. AI Studio Ask runs its normal routing, capability selection, ReAct loop, and memory access.
-4. AI Studio returns a structured result to the outer controller.
+1. An outer agent decides a bounded Northstar AI Ask turn is useful.
+2. The outer agent calls Joltrin through a typed request or participant HTTP endpoint.
+3. Northstar AI Ask runs its normal routing, capability selection, ReAct loop, and memory access.
+4. Northstar AI returns a structured result to the outer controller.
 
-This lets an external controller act at the boundary while AI Studio Ask manages its own delegated turn.
+This lets an external controller act at the boundary while Northstar AI Ask manages its own delegated turn.
 
 For concrete embedding and streaming examples, see [Ask Participant Mode](./ask-participant-mode).
 
@@ -302,7 +302,7 @@ This keeps the experience clear:
 
 ## Benefits of the Phase Model
 
-The phase capability workflow gives AI Studio a few practical advantages:
+The phase capability workflow gives Northstar AI a few practical advantages:
 
 - **Adaptive reasoning** when the task shape changes
 - **Safe recovery** when the user interjects or the current phase is wrong

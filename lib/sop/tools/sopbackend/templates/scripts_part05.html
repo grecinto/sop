@@ -1369,7 +1369,7 @@
                 });
                 const targetDocument = pipWindow.document;
                 targetDocument.open();
-                targetDocument.write(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/><title>SOP AI Chat</title><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#1f1f1f;overflow:hidden;}iframe{border:0;width:100%;height:100%;}</style></head><body><iframe src="${floaterUrl.toString()}" allow="clipboard-write"></iframe></body></html>`);
+                targetDocument.write(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/><title>AI Studio Chat</title><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#1f1f1f;overflow:hidden;}iframe{border:0;width:100%;height:100%;}</style></head><body><iframe src="${floaterUrl.toString()}" allow="clipboard-write"></iframe></body></html>`);
                 targetDocument.close();
                 
                 // Detect when PiP window closes

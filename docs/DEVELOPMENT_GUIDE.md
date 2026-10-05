@@ -18,7 +18,7 @@ The repository is a Go workspace. Keep product/site behavior in `src`; put behav
 - The React site and site backend handle public product pages, account flows, subscriptions, and onboarding.
 - The Data Manager is served by the shared `httpserver` or daemon using `sopbackend` templates and handlers.
 - The daemon provides local workspace, API, and PTY worker capabilities.
-- Normal Data Manager Chat goes through `/api/ask`. SOP Ask/ReAct owns classification and orchestration; the configured Cline SDK backend executes bounded coding work when Ask delegates.
+- Normal AI Studio Chat goes through `/api/ask`. Northstar AI Ask/ReAct owns classification and orchestration; the configured Cline SDK backend executes bounded coding work when Ask delegates. Joltrin is the core Go SDK used to embed and extend the platform.
 - Continue remains reference/compatibility code, not a shipping dependency.
 
 See [AI Studio](AI_STUDIO.md), [Ask architecture](ASK_V2_ARCHITECTURE.md), [Cline integration](CLINE_COPILOT_INTEGRATION_PLAN.md), and the [IDE backend contract](IDE_COPILOT_BACKEND_SDK.md).

@@ -407,63 +407,27 @@
             overflow: visible;
         }
 
-        body.sop-chat-floater-mode .chat-ai-summary-button {
-            flex: 0 1 auto;
-            min-width: 180px;
-            max-width: 320px;
-            width: auto;
-        }
-
         body.sop-chat-floater-mode .chat-controls {
             flex: 0 0 auto;
             margin-left: auto;
         }
 
-        .chat-ai-summary-button {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            justify-content: center;
-            gap: 1px;
-            min-width: 180px;
-            max-width: 260px;
-            width: auto;
-            flex: 0 0 auto;
-            padding: 4px 9px;
+        .chat-preferred-llm-select {
+            flex: 0 1 190px;
+            min-width: 115px;
+            max-width: 190px;
+            padding: 4px 7px;
             border: 1px solid var(--input-border);
-            border-radius: 6px;
+            border-radius: 5px;
             background: var(--input-bg);
             color: var(--text-color);
             cursor: pointer;
-            overflow: hidden;
-        }
-
-        .chat-ai-summary-button:hover {
-            background: var(--hover-bg);
-        }
-
-        .chat-ai-summary-label {
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-        }
-
-        .chat-ai-summary-values {
-            display: flex;
-            gap: 8px;
-            width: 100%;
-            min-width: 0;
             font-size: 11px;
             font-weight: 600;
         }
 
-        .chat-ai-summary-values span {
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        .chat-preferred-llm-select:hover {
+            background: var(--hover-bg);
         }
 
         .chat-controls {
@@ -930,14 +894,9 @@
                 display: block;
             }
 
-            .chat-ai-summary-button {
-                max-width: 160px;
-                padding: 4px 6px;
-            }
-
-            .chat-ai-summary-values {
-                gap: 4px;
-                font-size: 10px;
+            .chat-preferred-llm-select {
+                flex-basis: 145px;
+                min-width: 100px;
             }
 
             .modal-content { width: 95%; }

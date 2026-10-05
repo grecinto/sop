@@ -1,21 +1,21 @@
 ---
 sidebar_position: 4
-title: AI Studio Memory Advantage
+title: Northstar AI Memory Advantage
 ---
 
-# AI Studio Memory Advantage
+# Northstar AI Memory Advantage
 
-One of AI Studio's clearest advantages is that memory is a product capability, not just a backend service.
+One of Northstar AI's clearest advantages is that memory is a product capability, not just a backend service.
 
-You can run AI Studio in your own environment and keep memory aligned with your context, tools, and workstreams. This creates a consistent, private, and controllable assistant experience.
+You can run Northstar AI in your own environment and keep memory aligned with your context, tools, and workstreams. This creates a consistent, private, and controllable assistant experience.
 
-## AI Studio's Memory Advantage
+## Northstar AI's Memory Advantage
 
-**AI Studio brings structured data and AI knowledge together with a memory architecture designed for clear organization, semantic retrieval, and visual management.**
+**Northstar AI brings structured data and AI knowledge together with a memory architecture designed for clear organization, semantic retrieval, and visual management.**
 
 ### Revolutionary Architecture
 
-**AI Studio Spaces**:
+**Northstar AI Spaces**:
 - Organize knowledge through meaningful categories and items
 - Keep semantic relationships understandable and navigable
 - Support visual management through KnowledgeBase Studio
@@ -38,7 +38,7 @@ You can run AI Studio in your own environment and keep memory aligned with your 
 
 ### SQL Layer & Query Engine
 
-AI Studio includes a **SQL-like query engine** that provides familiar database operations while maintaining direct B-Tree performance:
+Northstar AI includes a **SQL-like query engine** that provides familiar database operations while maintaining direct B-Tree performance:
 
 **Natural Language to SQL:**
 - AI Copilot translates natural language like *"Find all customers who bought Electronics in the last month and spent over $500"* into executable queries
@@ -51,7 +51,7 @@ AI Studio includes a **SQL-like query engine** that provides familiar database o
 - Schema awareness enables relationship visualization and navigation
 
 **Direct Cursor Access:**
-- AI Studio interacts **directly with B-Tree cursors**, keeping data access efficient and predictable
+- Northstar AI interacts **directly with B-Tree cursors**, keeping data access efficient and predictable
 - Zero-copy result streaming from cursor to socket—process millions of records with constant memory (O(1) space)
 - Smart index utilization: seeks directly to matching records instead of full table scans
 
@@ -63,16 +63,16 @@ AI Studio includes a **SQL-like query engine** that provides familiar database o
 
 ### Additional Technical Advantages
 
-AI Studio combines capabilities that are often spread across separate tools:
+Northstar AI combines capabilities that are often spread across separate tools:
 
 - **Full ACID Transactions**: Consistent and reliable data updates
 - **SWARM Technology**: Distributed operation across the network
-- **Universal Data Platform**: Data created in Python can be read by Java apps or managed through AI Studio—full interoperability
+- **Universal Data Platform**: Data created in Python can be read by Java apps or managed through Northstar AI—full interoperability
 - **Actionable Queries**: Bulk operations (update, delete) execute directly in the query pipeline without select-then-modify round trips
 
 ## Value for Teams
 
-AI Studio is an open-source, self-hosted AI platform that runs in your environment and improves from your own interactions. It gives teams more control over their models, memory, runtime, and data.
+Northstar AI is an open-source, self-hosted AI platform that runs in your environment and improves from your own interactions. It gives teams more control over their models, memory, runtime, and data.
 
 For end users and teams, this means:
 
@@ -83,7 +83,7 @@ For end users and teams, this means:
 
 ## Why this matters
 
-AI Studio keeps memory and context close to the runtime where your work happens. That makes it easier to:
+Northstar AI keeps memory and context close to the runtime where your work happens. That makes it easier to:
 
 - keep useful context connected to your work
 - manage how knowledge is retrieved
@@ -93,7 +93,7 @@ Your memory and knowledge remain part of the product experience rather than bein
 
 ## A Clearer Memory Experience
 
-| Capability | AI Studio |
+| Capability | Northstar AI |
 | --- | --- | --- |
 | Memory ownership | Memory is a first-class capability in your runtime |
 | Context control | Context can be organized and managed explicitly |
@@ -103,7 +103,7 @@ Your memory and knowledge remain part of the product experience rather than bein
 
 ## The architectural advantage
 
-AI Studio provides a durable memory layer that is:
+Northstar AI provides a durable memory layer that is:
 
 - attached to the user’s own runtime context
 - consistent across sessions and workflows
@@ -115,7 +115,7 @@ That gives us a stronger foundation for long-lived assistance, especially in cod
 
 ## What this looks like in practice
 
-With AI Studio, memory can be delivered as a runtime capability that follows the end user rather than staying trapped in the product experience. That means:
+With Northstar AI, memory can be delivered as a runtime capability that follows the end user rather than staying trapped in the product experience. That means:
 
 - the user’s working memory can persist across tasks
 - the knowledge base can stay aligned with the user’s domain context
@@ -135,7 +135,7 @@ Imagine a team that wants every coding task to follow a small set of practices:
 
 In a typical copilot product, those preferences often live in scattered prompt snippets, local notes, or tribal memory. They may be applied sometimes, ignored other times, or lost entirely when the execution path changes.
 
-With AI Studio, those practices can live in memory as first-class guidance. When you ask for an implementation change, AI Studio can retrieve those practices and enrich the Ask pipeline automatically. The coding agent does not need a custom one-off integration for each rule. The memory layer supplies the enrichment as structured context.
+With Northstar AI, those practices can live in memory as first-class guidance. When you ask for an implementation change, Northstar AI can retrieve those practices and enrich the Ask pipeline automatically. The coding agent does not need a custom one-off integration for each rule. The memory layer supplies the enrichment as structured context.
 
 That means the user can say something simple like:
 
@@ -143,20 +143,20 @@ That means the user can say something simple like:
 Implement retry handling for the payment webhook timeout.
 ```
 
-And AI Studio can still carry forward the team’s real requirements:
+And Northstar AI can still carry forward the team’s real requirements:
 
 - use the team’s preferred retry/backoff pattern
 - keep the public API stable
 - update the tests that cover timeout handling
 - produce a structured result describing the modified files and checks that ran
 
-This remains valuable when AI Studio delegates the actual coding step to the Cline SDK backend. AI Studio manages the Ask pipeline, memory, and policy, and includes the best practices in the bounded delegated request.
+This remains valuable when Northstar AI delegates the actual coding step to the Cline SDK backend. Northstar AI manages the Ask pipeline, memory, and policy, and includes the best practices in the bounded delegated request.
 
 The result is practical, not theoretical:
 
 - users define best practices once
-- AI Studio keeps applying them whenever coding work is requested
-- the same guidance can improve native AI Studio tools and delegated Cline execution
+- Northstar AI keeps applying them whenever coding work is requested
+- the same guidance can improve native Northstar AI tools and delegated Cline execution
 - teams get more consistency without manually repeating the same instructions in every chat
 
 ## Customer-facing benefits
@@ -171,4 +171,4 @@ This design creates a few concrete benefits for the customer:
 
 ## Bottom line
 
-The advantage is not just “better prompts” or “better retrieval.” It is that our platform can ship memory as a real architectural primitive to end users through AI Studio. That gives us(you!) a more durable, more private, and more controllable copilot experience than provider-wrapped tools that hide the memory and orchestration layers behind a consumer application.
+The advantage is not just “better prompts” or “better retrieval.” It is that our platform can ship memory as a real architectural primitive to end users through Northstar AI. That gives us(you!) a more durable, more private, and more controllable copilot experience than provider-wrapped tools that hide the memory and orchestration layers behind a consumer application.

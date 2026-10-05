@@ -12,7 +12,7 @@ The old client design used these separations:
 - `session_id` represented workstream identity; `request_id` represented one execution.
 - Provider/model selection was sent explicitly rather than inferred from a daemon-side OpenAI facade.
 - Worker registration was loopback-bound, and advertised mutation capabilities were expected to reflect tested end-to-end behavior.
-- Results were expected to carry changed files and validation so the daemon could maintain SOP-owned history and undo.
+- Results were expected to carry changed files and validation so the daemon could maintain Northstar AI-owned history and undo.
 
 These are useful adapter-design lessons, not a claim that every legacy client path is currently built, tested, or supported for release.
 

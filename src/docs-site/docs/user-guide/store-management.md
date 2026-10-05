@@ -1,12 +1,12 @@
 ---
 sidebar_position: 4
 title: Store Management
-description: Use Stores in AI Studio to inspect, query, and manage your databases visually.
+description: Use Stores in Northstar AI to inspect, query, and manage your databases visually.
 ---
 
 # Store Management
 
-Stores in AI Studio let you inspect and manage structured data visually without leaving the product. They are the right choice when you want to browse records, test queries, or debug data issues quickly.
+Stores in Northstar AI let you inspect and manage structured data visually without leaving the product. They are the right choice when you want to browse records, test queries, or debug data issues quickly.
 
 ## When to use Stores
 

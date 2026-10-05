@@ -11,7 +11,7 @@ This index separates current contracts from proposals and historical implementat
 | Current local coding copilot integration | [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md) |
 | Add or adapt a coding-agent backend | [IDE_COPILOT_INTEGRATION_GUIDE.md](IDE_COPILOT_INTEGRATION_GUIDE.md) |
 | Backend-neutral delegated worker contract | [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md) |
-| LLM provider pool selection and fallback | [LLM_PROVIDER_POOL.md](LLM_PROVIDER_POOL.md) |
+| LLM provider pool selection and fallback | [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md#northstar-ai-provider-pool-and-preferred-llm) |
 | Unified Ask/ReAct architecture | [ASK_V2_ARCHITECTURE.md](ASK_V2_ARCHITECTURE.md) |
 | Workflow and participant-pattern guidance | [WORKFLOWS.md](WORKFLOWS.md) |
 
@@ -28,7 +28,7 @@ This index separates current contracts from proposals and historical implementat
 | Retry, escalation, and recovery state | [RETRY_ORCHESTRATION_STATE.md](RETRY_ORCHESTRATION_STATE.md) |
 | Delegated IDE worker interface and results | [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md) |
 | Adding a coding-agent integration | [IDE_COPILOT_INTEGRATION_GUIDE.md](IDE_COPILOT_INTEGRATION_GUIDE.md) |
-| Provider-pool order, retry, and outcome telemetry | [LLM_PROVIDER_POOL.md](LLM_PROVIDER_POOL.md) |
+| Provider-pool order, retry, and outcome telemetry | [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md#northstar-ai-provider-pool-and-preferred-llm) |
 
 ## AI Studio and Platform Features
 

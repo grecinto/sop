@@ -1,4 +1,4 @@
-# Northstar AI Vector Database SDK - Pricing & Features
+# Northstar AI Vector Database - Pricing & Features
 
 ## Product Overview
 

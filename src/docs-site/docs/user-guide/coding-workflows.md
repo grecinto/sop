@@ -1,16 +1,16 @@
 ---
 sidebar_position: 2
 title: Intelligent Coding
-description: AI Studio's Dynamic Planner and Phase system for intelligent multi-step coding tasks.
+description: Northstar AI's Dynamic Planner and Phase system for intelligent multi-step coding tasks.
 ---
 
-# Intelligent Coding with AI Studio
+# Intelligent Coding with Northstar AI
 
-AI Studio uses the **LLM as Orchestrator** paradigm—the AI chooses how to approach your task. Through a **Dynamic Planner** and **phase-based execution system**, it analyzes your request, creates a plan, and adapts as the work develops.
+Northstar AI uses the **LLM as Orchestrator** paradigm—the AI chooses how to approach your task. Through a **Dynamic Planner** and **phase-based execution system**, it analyzes your request, creates a plan, and adapts as the work develops.
 
 ### LLM-Guided Work
 
-AI Studio's LLM-guided approach provides:
+Northstar AI's LLM-guided approach provides:
 
 - 🤖 **AI analyzes your task** and determines the best approach
 - 🎯 **Dynamic planning** tailored to your specific situation
@@ -21,17 +21,19 @@ You describe what you want, and the AI orchestrates everything—from task class
 
 ## Works Across Native and Remote Tool Surfaces
 
-AI Studio can work with both its native tools and connected editor tools.
+Northstar AI can work with both its native tools and connected editor tools.
 
-In practice, that means AI Studio can:
+In practice, that means Northstar AI can:
 
 - read a remote agent's supported phases
 - understand which tools are available in each phase
-- align those remote phases to AI Studio's own workflow model
+- align those remote phases to Northstar AI's own workflow model
 - delegate a bounded step remotely
-- keep orchestration, memory, and handoff inside AI Studio
+- keep orchestration, memory, and handoff inside Northstar AI
 
-This lets the daemon-managed Cline SDK backend execute a bounded coding task while AI Studio Ask keeps the request connected to its phases, memory, and workstream.
+This lets the daemon-managed Cline SDK backend execute a bounded coding task while Northstar AI Ask keeps the request connected to its phases, memory, and workstream.
+
+In the AI Studio chat window, use the **Preferred LLM** selector in the header to change the primary model for subsequent messages. Choose **Pool config** at the bottom of that selector to manage provider keys. The selected model remains the preferred primary while Northstar AI can still use eligible pool fallbacks for availability.
 
 :::tip For Developers
 Want to understand the technical architecture? See the SDK documentation:
@@ -43,7 +45,7 @@ Want to understand the technical architecture? See the SDK documentation:
 
 ### Dynamic Planning 🤖
 
-The **Dynamic Planner** is AI Studio's intelligent task analyzer that:
+The **Dynamic Planner** is Northstar AI's intelligent task analyzer that:
 
 - **Classifies your task** - Determines task type (debugging, implementation, testing, refactoring)
 - **Generates a custom plan** - Creates phase sequence tailored to your specific request
@@ -59,13 +61,13 @@ The **Dynamic Planner** is AI Studio's intelligent task analyzer that:
 
 Every decision—from which phase to enter, which tools to use, and when to pivot—is guided by the LLM reasoning about your specific context.
 
-The same reasoning guides recovery. If execution needs more information, AI Studio can pause for clarification, stop when your attention is needed, or move back to an earlier phase when that is the best way forward.
+The same reasoning guides recovery. If execution needs more information, Northstar AI can pause for clarification, stop when your attention is needed, or move back to an earlier phase when that is the best way forward.
 
 **Example:**
 ```
 You: Debug the authentication timeout issue
 
-AI Studio: Analyzing task...
+Northstar AI: Analyzing task...
           Task Type: Debugging
           Complexity: Medium
           
@@ -80,7 +82,7 @@ AI Studio: Analyzing task...
 
 ### Phase-Based Execution
 
-AI Studio executes through **structured phases** that organize the work into clear stages:
+Northstar AI executes through **structured phases** that organize the work into clear stages:
 
 **Standard Phase Sequence** (adapted per task):
 
@@ -129,7 +131,7 @@ This keeps the conversation, artifacts, and decisions together as the task devel
 
 The same phase system helps conserve tokens.
 
-AI Studio keeps each turn focused on the current phase and active domain, so the model can spend more of its prompt budget on the work that matters right now.
+Northstar AI keeps each turn focused on the current phase and active domain, so the model can spend more of its prompt budget on the work that matters right now.
 
 It also reduces unnecessary work:
 
@@ -140,7 +142,7 @@ It also reduces unnecessary work:
 
 The result is better output per token spent.
 
-For the customer-facing comparison and positioning, see [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage).
+For the customer-facing comparison and positioning, see [Why Northstar AI Uses Fewer Tokens](../token-efficiency-advantage).
 
 ### Knowledge Base Templates (Optional)
 
@@ -154,7 +156,7 @@ These are **pre-defined phase sequences** that encode your team's best practices
 
 ## Multi-Language Support
 
-AI Studio workflows provide **comprehensive support for multiple programming languages**, automatically adapting behavior based on your project type.
+Northstar AI workflows provide **comprehensive support for multiple programming languages**, automatically adapting behavior based on your project type.
 
 ### Supported Languages
 
@@ -176,7 +178,7 @@ The shared coding workflow stack currently supports the following languages for 
 
 ### Automatic Language Detection
 
-When you open a project, AI Studio:
+When you open a project, Northstar AI:
 
 1. **Detects your project type** by scanning for marker files (e.g., `go.mod`, `package.json`, `Cargo.toml`)
 2. **Configures language-specific tooling** for tests, code analysis, and context gathering
@@ -208,7 +210,7 @@ You don't need to configure anything—workflows automatically use the right too
 
 ### Cross-Language Workflows
 
-AI Studio handles **polyglot projects** seamlessly:
+Northstar AI handles **polyglot projects** seamlessly:
 
 - If your repository contains multiple languages, workflows adapt per-directory
 - The undo system tracks code artifacts across all languages
@@ -219,7 +221,7 @@ AI Studio handles **polyglot projects** seamlessly:
 ```
 You: Debug the authentication middleware
 
-AI Studio: [Detects Python project from pyproject.toml]
+Northstar AI: [Detects Python project from pyproject.toml]
           [Starts Debugging Workflow]
           
           Step 1: Analyzing Python code...
@@ -238,7 +240,7 @@ AI Studio: [Detects Python project from pyproject.toml]
 ```
 You: Implement error handling for the parser
 
-AI Studio: [Detects Rust project from Cargo.toml]
+Northstar AI: [Detects Rust project from Cargo.toml]
           [Starts Implementation Workflow]
           
           Step 1: Analyzing Rust code structure...
@@ -254,7 +256,7 @@ AI Studio: [Detects Rust project from Cargo.toml]
 
 ### Language-Specific Best Practices
 
-AI Studio applies **language-appropriate patterns** automatically:
+Northstar AI applies **language-appropriate patterns** automatically:
 
 - **Error handling**: `Result<T, E>` in Rust, exceptions in Python/Java, error returns in Go
 - **Testing**: Property-based testing hints in Rust, unittest/pytest in Python, JUnit in Java
@@ -263,7 +265,7 @@ AI Studio applies **language-appropriate patterns** automatically:
 
 ## Team Best Practices That Stay On
 
-AI Studio can go beyond generic language advice. You can store your own team practices in memory and have them automatically enrich coding asks.
+Northstar AI can go beyond generic language advice. You can store your own team practices in memory and have them automatically enrich coding asks.
 
 For example, your team might define guidance such as:
 
@@ -272,11 +274,11 @@ For example, your team might define guidance such as:
 - use the repository’s existing error-wrapping and logging patterns
 - return a clear modification summary for review
 
-When you ask AI Studio to implement or refactor something, those practices can be injected automatically into the overall Ask pipeline. You do not have to paste the same checklist into every prompt.
+When you ask Northstar AI to implement or refactor something, those practices can be injected automatically into the overall Ask pipeline. You do not have to paste the same checklist into every prompt.
 
 This is especially useful in real projects because the enrichment survives different execution paths:
 
-- direct AI Studio coding tools can use it
+- direct Northstar AI coding tools can use it
 - multi-phase workflow planning can use it
 - delegated Cline execution can use it
 
@@ -305,7 +307,7 @@ These interruptions work best when you want to **enhance or refine** what the AI
 
 ### How It Works
 
-1. **AI Studio starts executing** a workflow (e.g., implementing a login form)
+1. **Northstar AI starts executing** a workflow (e.g., implementing a login form)
 2. **You realize you want to add something** (e.g., "Also add error handling")
 3. **Start typing in the input field** while the workflow is running
    - The button icon switches from ❌ (stop) to → (send) as you type
@@ -320,13 +322,13 @@ These interruptions work best when you want to **enhance or refine** what the AI
 ```
 You: Generate a login form component
 
-AI Studio: Creating workflow...
+Northstar AI: Creating workflow...
           Step 1: Designing component structure...
 
 You: [types while running] "Also add error handling for network failures"
      [Icon changes from ❌ to →]
 
-AI Studio: ↪️ Got it - adding network error handling
+Northstar AI: ↪️ Got it - adding network error handling
           Step 2: Generating code with error handling...
 ```
 
@@ -337,7 +339,7 @@ Your feedback gets incorporated automatically without restarting.
 ```
 You: Find and fix the memory leak in the cache manager
 
-AI Studio: Creating custom workflow...
+Northstar AI: Creating custom workflow...
           
           Plan: "Fix Cache Memory Leak"
           → Analyze cache implementation
@@ -352,7 +354,7 @@ AI Studio: Creating custom workflow...
           Step 2: Checking allocations...
 ```
 
-AI Studio creates the right workflow for your specific situation.
+Northstar AI creates the right workflow for your specific situation.
 
 ## When to Stop and Start Fresh
 
@@ -368,7 +370,7 @@ For **major direction changes**, it's better to stop the current workflow and st
 
 1. **Click the ❌ button** (when no text is typed) to stop the current workflow
 2. **Send a fresh prompt** with your new direction
-3. **AI Studio classifies the new task** and starts the appropriate workflow
+3. **Northstar AI classifies the new task** and starts the appropriate workflow
 
 This gives you clean separation between different tasks and ensures each workflow can focus on a single clear objective.
 
@@ -377,7 +379,7 @@ This gives you clean separation between different tasks and ensures each workflo
 ```
 You: Implement user authentication
 
-AI Studio: [Starts Implementation Workflow]
+Northstar AI: [Starts Implementation Workflow]
           Step 1: Designing authentication flow...
 
 You: [Clicks ❌ to stop]
@@ -385,7 +387,7 @@ You: [Clicks ❌ to stop]
 
 You: Actually, let's write comprehensive tests for the existing auth code first
 
-AI Studio: [Classifies as Testing task]
+Northstar AI: [Classifies as Testing task]
           [Starts Testing Workflow]
           Step 1: Analyzing existing code...
 ```
@@ -396,7 +398,7 @@ It also means you do not need to switch into a separate simplified workflow just
 
 ## Visual Indicators
 
-AI Studio provides clear visual feedback for interrupt mode:
+Northstar AI provides clear visual feedback for interrupt mode:
 
 | State | Button Icon | Input Border | Behavior |
 |-------|-------------|--------------|----------|
@@ -421,7 +423,7 @@ The ↪️ badge in chat history marks messages that modified an active workflow
 
 ### When to Use What
 
-**Let AI decide** - Most of the time, just describe what you want and AI Studio picks the best approach automatically.
+**Let AI decide** - Most of the time, just describe what you want and Northstar AI picks the best approach automatically.
 
 **Need something specific?** You can request:
 ```
@@ -431,7 +433,7 @@ The ↪️ badge in chat history marks messages that modified an active workflow
 
 ## Common Modification Keywords
 
-AI Studio detects these keywords to understand your intent:
+Northstar AI detects these keywords to understand your intent:
 
 **Additive modifications:**
 - "Also..." → Add something extra
@@ -475,7 +477,7 @@ A: Yes. Modifications are queued and incorporated at the next available step tra
 
 ## Undo and Restore
 
-AI Studio keeps searchable restore history connected to your sessions and workstreams. When a workstream changes files, the system records the surrounding context and the file changes so you can find and restore useful points in your work later.
+Northstar AI keeps searchable restore history connected to your sessions and workstreams. When a workstream changes files, the system records the surrounding context and the file changes so you can find and restore useful points in your work later.
 
 ### Search Your Workstream History
 
@@ -491,7 +493,7 @@ Results combine meaning and recency, making it easier to find the change you rem
 
 ### Restore What You Need
 
-AI Studio supports practical recovery options:
+Northstar AI supports practical recovery options:
 
 - restore a complete change set from a workstream
 - restore selected files when only part of the work should be reversed
@@ -507,16 +509,16 @@ See [Undo and Restore](../sdk/undo-system) for the SDK view of session-aware wor
 
 ## Summary
 
-AI Studio's **LLM as Orchestrator** paradigm delivers truly intelligent coding assistance:
+Northstar AI's **LLM as Orchestrator** paradigm delivers truly intelligent coding assistance:
 
-- **LLM-guided decisions** - AI Studio reasons about the task and chooses the next step
+- **LLM-guided decisions** - Northstar AI reasons about the task and chooses the next step
 - **Dynamic Planner** generates custom plans tailored to your specific task
 - **Phase-based execution** organizes work into clear, manageable stages
 - **Adaptive intelligence** adjusts approach based on discoveries and feedback
 - **Real-time adjustments** let you guide the AI's reasoning as work progresses
 - **Knowledge Base templates** (optional) provide proven patterns as starting points
 - **Multi-language support** works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#
-- **Transparent reasoning** shows you what AI Studio understood and plans to do
+- **Transparent reasoning** shows you what Northstar AI understood and plans to do
 
 Just describe what you want to accomplish. The LLM analyzes your task, reasons about the best approach, creates an appropriate phase plan, and uses the right tools. The result is an intelligent, adaptive coding experience that stays connected to your work.
 
@@ -524,7 +526,7 @@ Just describe what you want to accomplish. The LLM analyzes your task, reasons a
 
 ## For Developers & SDK Users
 
-This guide focuses on using AI Studio from an end-user perspective. For SDK integration details:
+This guide focuses on using Northstar AI from an end-user perspective. For SDK integration details:
 
 - **[Workflow Architecture (SDK)](../sdk/workflow-architecture)** - Complete technical documentation covering:
    - Dynamic phase planning and the Ask pipeline

@@ -6,7 +6,7 @@ description: Use the AI window as the primary interaction surface while the syst
 
 # AI Window
 
-AI Studio centers the experience around the AI window. The AI window is the primary interaction surface, and the terminal is the supporting mechanism the AI uses to show you the running commands and what is happening in real time.
+AI Studio is Northstar AI's user interface. Its AI window is the primary interaction surface, and the terminal is the supporting mechanism Northstar AI uses to show you running commands and their output in real time.
 
 ## What this experience gives you
 
@@ -19,13 +19,13 @@ The terminal experience helps you:
 
 ## The AI Window and command visibility
 
-The AI chat window is the primary surface for interaction. When a command is launched, the AI can surface command progress, terminal output, and completion status directly in that window so the user can stay focused on the conversation.
+The AI Studio chat window is the primary surface for interaction. When a command is launched, Northstar AI can surface command progress, terminal output, and completion status directly in that window so the user can stay focused on the conversation.
 
 The terminal is a supporting capability underneath that experience. It is used when the AI needs to run a command, observe its behavior, or interact with a real shell, while the AI window remains the main place where the user sees progress and responds.
 
 ## Floating AI Window for desktop use
 
-AI Studio can also be surfaced through a floating AI chat window that stays above other applications. This makes the AI window the primary desktop surface, while the terminal remains a sub-feature that the AI can use behind the scenes when it needs to run commands.
+AI Studio can also be opened as a floating chat window that stays above other applications. This makes the AI window the primary desktop surface, while the terminal remains a sub-feature Northstar AI can use behind the scenes when it needs to run commands.
 
 The floating window can be placed anywhere on the screen and used as a lightweight companion for:
 

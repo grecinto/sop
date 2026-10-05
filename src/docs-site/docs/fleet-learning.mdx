@@ -94,7 +94,7 @@ Fleet learning inherits the same durability model as the embedded KnowledgeBase 
 
 That matters for local Copilot and agent workflows because the runtime can continue to learn, retrieve, and reason from the persisted content even when the local embedder or storage path is temporarily unavailable. The repair pass later brings the semantic index back into consistency without requiring manual intervention.
 
-For the user's workspace, the policy is intentionally conservative. The first vectorization failures are treated as skip-and-continue events. If the same targets keep failing over time, AI Studio offers a recovery prompt that asks whether to continue ignoring the issue, rebuild the indexes, or clear stale semantic indexes and rebuild them from the persisted content. The SetupWizard can create a recovery disk or folder that hosts a persistent queue for pending vectorization work, allowing the system to automate self-healing after restarts and preserve progress across sessions.
+For the user's workspace, the policy is intentionally conservative. The first vectorization failures are treated as skip-and-continue events. If the same targets keep failing over time, Northstar AI offers a recovery prompt that asks whether to continue ignoring the issue, rebuild the indexes, or clear stale semantic indexes and rebuild them from the persisted content. The SetupWizard can create a recovery disk or folder that hosts a persistent queue for pending vectorization work, allowing the system to automate self-healing after restarts and preserve progress across sessions.
 
 ### Benchmark PoC: retrieval quality using industry-style vector DB metrics
 

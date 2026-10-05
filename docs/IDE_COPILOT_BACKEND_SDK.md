@@ -6,15 +6,15 @@ For a step-by-step guide to implementing and registering another backend, see [I
 
 ## Ownership
 
-For the standard Data Manager Chat path, SOP Ask is the outer controller. It classifies the user request and may delegate one bounded coding task to an `ideworker.Backend`. The backend runs its own bounded execution and returns a structured result. It does not re-enter or replace the Ask controller.
+For the standard AI Studio Chat path, Northstar AI Ask is the outer controller. It classifies the user request and may delegate one bounded coding task to an `ideworker.Backend`. The backend runs its own bounded execution and returns a structured result. It does not re-enter or replace the Ask controller.
 
 ```text
-Chat Send -> /api/ask -> SOP Ask/ReAct -> ideworker capability -> backend -> structured result -> SOP history/undo
+AI Studio Chat Send -> /api/ask -> Northstar AI Ask/ReAct -> ideworker capability -> backend -> structured result -> Northstar AI history/undo
 ```
 
 The production UI has one Send action. Backend-specific routes are diagnostic or integration surfaces, not parallel production chat controllers. Product-specific Cline behavior, runtime setup, MCP tools, and manual validation are documented in [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
 
-For Cline, distinguish two continuity scopes: SOP owns durable, cross-workstream memory and undo; a backend session may retain task-local context for the same active workstream. The daemon-managed SDK host reuses `core.send()` for follow-ups within that workstream and isolates other workstreams and workspace/provider configurations. Daemon restart begins a fresh tactical session, and a confirmed SOP restore retires the current host. See the [Cline session policy](CLINE_COPILOT_INTEGRATION_PLAN.md#memory-and-session-continuity).
+For Cline, distinguish two continuity scopes: Northstar AI owns durable, cross-workstream memory and undo; a backend session may retain task-local context for the same active workstream. The daemon-managed Cline SDK host reuses `core.send()` for follow-ups within that workstream and isolates other workstreams and workspace/provider configurations. Daemon restart begins a fresh tactical session, and a confirmed Northstar AI restore retires the current host. See the [Cline session policy](CLINE_COPILOT_INTEGRATION_PLAN.md#memory-and-session-continuity).
 
 The Ask-visible tool currently retains the legacy name `delegate_continue_task` for compatibility. It delegates through the shared interface and does not imply Continue is the selected backend.
 
@@ -32,11 +32,11 @@ type Backend interface {
 }
 ```
 
-`SessionState` reports connectivity, backend/IDE identity, workspace context, and supported capabilities. `TaskRequest` carries explicit correlation, task, provider/model, workspace, allowed-tool, and guidance fields. Application state belongs in these request/state fields, not in `context.Context`; context is for cancellation and request-scoped infrastructure.
+`SessionState` reports connectivity, backend/IDE identity, workspace context, and supported capabilities. `TaskRequest` carries explicit correlation, task, provider/model, workspace, allowed-tool, and guidance fields. Application state belongs in these request/state fields, not in `context.Context`; context is for cancellation and request-scoped infrastructure. This is part of the Joltrin SDK contract; Northstar AI is the product/runtime and AI Studio is its HTTPServer-served Data Manager UI.
 
 Credentials are sensitive. A backend must not log keys or expose them in command text, process arguments, status messages, diffs, or user-facing activity. Preserve cancellation from `ctx` through the backend's execution process.
 
-The daemon's provider pool applies to SOP Ask generation, not automatically to a delegated backend. See [LLM Provider Pool Behavior](LLM_PROVIDER_POOL.md) for the primary/fallback order, retry rules, telemetry limits, and Cline boundary.
+The daemon's provider pool applies to Northstar AI Ask generation, not automatically to a delegated backend. See the [Northstar AI Provider Pool and Preferred LLM section](CLINE_COPILOT_INTEGRATION_PLAN.md#northstar-ai-provider-pool-and-preferred-llm) for the primary/fallback order, retry rules, telemetry limits, AI Studio preference control, and Cline boundary.
 
 ## Result Contract
 
@@ -89,13 +89,13 @@ Backend availability controls whether delegation is exposed. With no usable back
 3. Validate capability reporting against actual edit/result behavior.
 4. Return a parseable `ExecutionResult` and propagate cancellation.
 5. Add focused tests for session inspection, task execution, status, cancellation, workspace validation, and result parsing.
-6. Verify the normal `/api/ask` path decides delegation and that non-coding prompts remain on the SOP Ask path.
+6. Verify the normal `/api/ask` path decides delegation and that non-coding prompts remain on the Northstar AI Ask path.
 
 The [integration walkthrough](IDE_COPILOT_INTEGRATION_GUIDE.md) maps these steps onto both implementations: the current daemon-owned Cline SDK host and the retained Continue IDE-callback adapter.
 
-The exported Go interface is the SDK extension point. The daemon does not expose a general plugin-discovery API, and the Cline host's private NDJSON process protocol is not the backend contract. In this integration, MCP is used by Cline to call SOP tools; task delegation from SOP to Cline still uses `ideworker.Backend` and the Cline SDK adapter.
+The exported Joltrin Go interface is the SDK extension point. The daemon does not expose a general plugin-discovery API, and the Cline host's private NDJSON process protocol is not the backend contract. In this integration, MCP is used by Cline to call Northstar AI tools; task delegation from Northstar AI to Cline still uses `ideworker.Backend` and the Cline SDK adapter.
 
-Do not add backend-specific UI buttons or make the backend the outer controller. Do not copy backend chat history into SOP; return the bounded task result and structured changes needed for SOP-owned history and undo.
+Do not add backend-specific UI buttons or make the backend the outer controller. Do not copy backend chat history into Northstar AI; return the bounded task result and structured changes needed for Northstar AI-owned history and undo.
 
 ## Current Implementations
 

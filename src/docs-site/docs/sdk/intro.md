@@ -1,4 +1,4 @@
-# SDK Documentation
+# Joltrin SDK
 
 **Coming soon**: SDK licensing with access to our 24/7 email-based support system.
 
@@ -15,7 +15,9 @@ Traditional vector databases use overnight K-Means clustering in data centers to
 
 ## Overview
 
-The SDK originates from [Scalable Objects Persistence (SOP)](https://github.com/sharedcode/sop), the MIT-licensed open source foundation beneath AI Studio.
+Northstar AI is the product and platform, AI Studio is its HTTPServer-served Data Manager UI, and Joltrin is the core SDK used to embed and extend the platform.
+
+Joltrin is the current name of the SDK. It grew from Scalable Objects Persistence (SOP), the MIT-licensed open-source foundation beneath Northstar AI. The project now lives at [github.com/sharedcode/joltrin](https://github.com/sharedcode/joltrin); Go examples still use the legacy `github.com/sharedcode/sop` module path for compatibility.
 
 The SDK provides:
 
@@ -29,12 +31,12 @@ The SDK provides:
 - **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
 - **Phase + domain token efficiency**: Structured phases and domain-aware tool surfaces keep the active prompt focused, reduce irrelevant tool exposure, and cut wasted retry turns without falling back to rigid routing
 - **Multi-language coding workflows**: Shared readers/analyzers and workflow/script generators support Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular
-- **Ask as Participant**: Use AI Studio Ask as a bounded participant through typed in-process or HTTP contracts, including integrations with external agent controllers
+- **Ask as Participant**: Use Northstar AI Ask as a bounded participant through typed in-process or HTTP contracts, including integrations with external agent controllers
 - **Undo and Restore**: Session-aware, workstream-based change history with natural language search and restore support
 
 ## Why this matters for AI platforms
 
-AI Studio is more than a vector index. It brings memory, routing, retrieval, and distributed execution together in one platform for copilots, agents, and real-time AI systems.
+Northstar AI is more than a vector index. It brings memory, routing, retrieval, and distributed execution together in one platform for copilots, agents, and real-time AI systems.
 
 Key advantages include:
 
@@ -48,7 +50,7 @@ Key advantages include:
 
 The workflow architecture is not only about control flow. It is also a token-efficiency strategy.
 
-By combining **phase awareness** with **domain awareness**, AI Studio avoids the common failure mode where every turn has to expose every tool, every instruction set, and every recovery path at once.
+By combining **phase awareness** with **domain awareness**, Northstar AI avoids the common failure mode where every turn has to expose every tool, every instruction set, and every recovery path at once.
 
 This reduces token waste in three ways:
 
@@ -56,17 +58,17 @@ This reduces token waste in three ways:
 - **Smaller active domain surface**: The model reasons inside the relevant domain slice instead of paying prompt budget for unrelated platform capabilities.
 - **Fewer wasted retries**: When the workflow can pause for clarification, move backward to the right phase, or stop cleanly, it avoids spending tokens on blind continuation.
 
-The result is better per-token usefulness, not just a smaller prompt. AI Studio keeps the LLM in control while still making each turn denser and more relevant.
+The result is better per-token usefulness, not just a smaller prompt. Northstar AI keeps the LLM in control while still making each turn denser and more relevant.
 
-For a customer-facing explanation of why this matters competitively, read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage).
+For a customer-facing explanation of why this matters competitively, read [Why Northstar AI Uses Fewer Tokens](../token-efficiency-advantage).
 
 ## Next Steps
 
-- Read the [SDK History](./history) page for the SOP origin, licensing, and source-availability model
+- Read [Joltrin SDK History](./history) for the name transition, SOP open-source origin, licensing, and source-availability model
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
-- Read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage)
+- Read [Why Northstar AI Uses Fewer Tokens](../token-efficiency-advantage)
 - Understand the [Workflow Architecture](./workflow-architecture) - dynamic phases, workstreams, and the Ask pipeline execution model
-- Read about [IDE Copilot Backends](./ide-copilot-backend) - how SOP Ask delegates bounded coding work to its configured backend, with Cline SDK as the default
+- Read about [IDE Copilot Backends](./ide-copilot-backend) - how Northstar AI Ask delegates bounded coding work through its Joltrin SDK backend, with Cline SDK as the default
 - Follow the [Ask Participant Mode](./ask-participant-mode) guide for concrete embedding, HTTP, and NDJSON streaming examples
 - Read about [Undo and Restore](./undo-system) - session-aware workstream history, search, and recovery

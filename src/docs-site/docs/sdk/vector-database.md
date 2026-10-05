@@ -124,7 +124,7 @@ Result: Each level is resolved with a fast B-Tree lookup over the
 
 ### Swarm-style distributed retrieval
 
-SOP’s retrieval design is built around independent nodes that can collaborate without depending on a single centralized controller. In practice, that means:
+Joltrin’s retrieval design is built around independent nodes that can collaborate without depending on a single centralized controller. In practice, that means:
 
 - **No single point of failure** for retrieval and memory operations
 - **Elastic scale** by adding more nodes rather than depending on one large index service

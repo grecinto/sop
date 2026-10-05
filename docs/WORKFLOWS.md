@@ -1,4 +1,4 @@
-# SOP Cloud Workflows - Complete Documentation
+# Northstar AI Workflows - Complete Documentation
 
 **Last Updated**: 2026-07-28  
 **Status**: ✅ Capability-Based Coding Workflow Services + Participant Pattern  

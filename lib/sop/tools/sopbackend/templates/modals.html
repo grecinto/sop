@@ -276,11 +276,11 @@
     <div class="chat-header">
         <div class="chat-header-controls">
             <span>AI</span>
-            <button type="button" id="chat-ai-summary-button" class="chat-ai-summary-button" onmousedown="event.stopPropagation()" onclick="event.stopPropagation(); toggleChatSettings()" title="View or edit LLM and embedder settings">
-                <span class="chat-ai-summary-values">
-                    <span id="chat-ai-summary-combined">Auto * Default emb</span>
-                </span>
-            </button>
+            <select id="chat-preferred-llm-select" class="chat-preferred-llm-select" aria-label="Preferred LLM" title="Preferred LLM for AI Chat; changes apply to subsequent messages" onclick="event.stopPropagation()" onchange="event.stopPropagation(); handleChatPreferredLLMChange(this)">
+                {{template "llmOptions" .}}
+                <option value="__pool_config_divider__" disabled>────────────</option>
+                <option value="__pool_config__">Pool config</option>
+            </select>
 
             <select id="domain-select" style="display: inline-block; width: 92px; min-width: 92px; max-width: 92px; flex: 0 0 92px; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; margin-left: 4px; overflow: hidden; text-overflow: ellipsis;" onclick="event.stopPropagation()" onchange="handleDomainChange(this)" title="Active Space">
                 <option value="" selected>None</option>
@@ -396,7 +396,7 @@
                 The selected model is the default preferred model. The runtime may automatically switch to a cheaper eligible model in the pool when the task allows it while still meeting the required intelligence level.
             </p>
         </div>
-        <h4 style="margin-top: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">Provider Key Pool</h4>
+        <h4 id="chat-settings-pool-config-heading" style="margin-top: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">Provider Key Pool</h4>
         <div style="margin-bottom: 10px;">
             <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0;">
                 Store keys for OpenAI, Anthropic, and Gemini here. The app can then route requests across the pool, preferring the cheapest eligible model that still satisfies the required intelligence tier.

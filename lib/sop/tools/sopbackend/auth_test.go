@@ -782,7 +782,7 @@ func TestHandleRoot_ShowsLoginPageWhenConfigExists(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "SOP Login") {
+	if !strings.Contains(w.Body.String(), "AI Studio") {
 		t.Fatalf("expected login page HTML, got %q", w.Body.String())
 	}
 }
@@ -1286,7 +1286,7 @@ func TestHandleLoginPage_RendersLoginScreen(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "SOP Login") {
+	if !strings.Contains(w.Body.String(), "AI Studio") {
 		t.Fatalf("expected login page HTML, got %q", w.Body.String())
 	}
 }

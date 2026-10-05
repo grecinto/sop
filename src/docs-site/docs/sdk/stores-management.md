@@ -2,13 +2,13 @@
 
 ## Technical reference for developers
 
-**Stores** provide a visual database management experience for AI Studio and its SDK. This page is intended for developers who want to understand how Stores fit into the platform, how to work with them programmatically, and how they differ from other data-oriented features.
+**Stores** are managed visually in AI Studio and programmatically through the Joltrin SDK. This page is intended for developers who want to understand how Stores fit into the Northstar AI platform, how to work with them programmatically, and how they differ from other data-oriented features.
 
 This document focuses on technical usage, integration patterns, and implementation workflows rather than day-to-day UI guidance.
 
 ## Development workflows: Code-First vs Data-First
 
-AI Studio supports two complementary development approaches, giving you flexibility in how you build and manage your applications:
+Northstar AI supports two complementary development approaches, giving you flexibility in how you build and manage your applications:
 
 ### Code-First workflow
 Define stores and logic in your application code first, then use Stores UI to inspect and manage them:
@@ -45,12 +45,12 @@ Most teams use both workflows:
 - Transition to **Code-First** as the application matures and requirements solidify
 - Continue using **Stores UI** for data inspection, debugging, and ad-hoc operations
 
-Both approaches provide full access to AI Studio's data capabilities. Choose the one that best fits your team's preferences and project needs.
+Both approaches provide full access to Northstar AI's data capabilities. Choose the one that best fits your team's preferences and project needs.
 
 ## What you can do with Stores
 
 ### Browse and inspect data
-- View all data stores within your SOP databases
+- View all data stores within your Joltrin databases
 - Inspect items stored in B-tree structures
 - Navigate through your database organization
 - Search and filter data in real-time
@@ -73,9 +73,9 @@ Both approaches provide full access to AI Studio's data capabilities. Choose the
 - Roll back when needed
 - Inspect transaction state
 
-## Why Stores Matters for AI Studio Developers
+## Why Stores Matters for Northstar AI Developers
 
-Professional database management tools make development more productive. Stores makes it easier to build, debug, and operate AI Studio applications.
+Professional database management tools make development more productive. Stores makes it easier to build, debug, and operate Northstar AI applications.
 
 **Accelerates development:**
 - Instantly inspect data structures without writing inspection code
@@ -84,7 +84,7 @@ Professional database management tools make development more productive. Stores 
 - Debug retrieval logic with real-time feedback
 
 **Lowers barriers to entry:**
-- New developers can explore AI Studio visually before diving into the API
+- New developers can explore Northstar AI visually before diving into the API
 - Non-developers can participate in schema design and data operations
 - Visual tools make complex B-tree operations intuitive
 - Learn the data model through interactive exploration
@@ -96,18 +96,18 @@ Professional database management tools make development more productive. Stores 
 - Verify data integrity across deployments
 
 **Built for the community:**
-Stores gives AI Studio developers a practical visual way to work with structured data alongside the platform's open-source foundation.
+Stores gives Northstar AI developers a practical visual way to work with structured data alongside the platform's open-source foundation.
 
 ## UI vs programmatic API
 
-The AI Studio SDK provides both visual tools and a powerful programmatic API. This dual approach gives teams a flexible developer experience for exploration, automation, and production use.
+AI Studio provides visual tools, while the Joltrin SDK provides the programmatic API. Together they give teams a flexible developer experience for exploration, automation, and production use.
 
 **Use the Stores UI for:**
 - Development and debugging workflows
 - Exploring unfamiliar databases
 - Ad-hoc queries and data operations
 - Administrative tasks and data curation
-- Learning AI Studio's data architecture and capabilities
+- Learning Northstar AI's data architecture and capabilities
 
 **Use the programmatic API for:**
 - Production application logic
@@ -129,7 +129,7 @@ Both approaches work together naturally. The visual tools accelerate development
 
 ## AI-powered database operations
 
-Stores integrates with AI Studio, bringing conversational database management to your workspace. This makes database operations accessible through natural language.
+Stores integrates with Northstar AI, bringing conversational database management to your workspace. This makes database operations accessible through natural language.
 
 **Ask questions about your data:**
 - "What stores exist in the system database?"
@@ -149,7 +149,7 @@ Stores integrates with AI Studio, bringing conversational database management to
 - Suggest query optimizations
 - Debug data issues
 
-This conversational interface is particularly valuable during development, making database exploration intuitive for both experienced and new AI Studio developers.
+This conversational interface is particularly valuable during development, making database exploration intuitive for both experienced and new Northstar AI developers.
 
 ## Common use cases
 
@@ -159,7 +159,7 @@ This conversational interface is particularly valuable during development, makin
 3. Inspect category structures
 4. Debug retrieval paths, then implement in your application code
 
-### Migrating data to SOP
+### Migrating data to Joltrin
 1. Write migration scripts in the Stores UI
 2. Execute and verify results in real-time
 3. Inspect data layout and relationships
@@ -182,16 +182,16 @@ This conversational interface is particularly valuable during development, makin
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - See [SDK overview](./intro) for programmatic database access
-- Visit the [SOP GitHub repository](https://github.com/sharedcode/sop) to learn about the open-source foundation behind the SDK
+- Visit the [Joltrin GitHub repository](https://github.com/sharedcode/joltrin) to learn about the open-source foundation behind the SDK
 
 ## Open-Source Foundation
 
-AI Studio builds on the open-source SOP foundation and continues to benefit from its community and persistence technologies.
+Northstar AI builds on Joltrin, whose open-source foundation was historically known as SOP, and continues to benefit from its community and persistence technologies.
 
-**What this brings to AI Studio developers:**
+**What this brings to Northstar AI developers:**
 - Enterprise-quality tooling at no cost
 - Visual database management that rivals commercial products
 - AI-powered operations that set new standards for database UX
 - Support for both hobbyist and enterprise use cases
 
-**Learn more:** Visit the [SOP community on GitHub](https://github.com/sharedcode/sop) to explore the open-source project behind the SDK.
+**Learn more:** Visit the [Joltrin community on GitHub](https://github.com/sharedcode/joltrin) to explore the open-source project behind the SDK.

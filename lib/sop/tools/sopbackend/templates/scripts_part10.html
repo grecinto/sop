@@ -692,6 +692,7 @@
         toggleChatSettingsFields();
         if (typeof persistChatSettingsDraft === 'function') {
             const nextConfig = persistChatSettingsDraft();
+            syncChatControlsFromAIConfig(nextConfig);
             syncSetupWizardControlsFromAIConfig(nextConfig);
         }
     }
@@ -758,23 +759,14 @@
 
     function syncChatControlsFromAIConfig(aiConfig) {
         const cfg = clearEncryptedAISecretsForDisplay(aiConfig || {});
-        const summaryCombined = document.getElementById('chat-ai-summary-combined');
-
-        if (summaryCombined) {
-            summaryCombined.textContent = describeAISummarySelection(cfg);
-        }
-
-        if (!cfg.brain_provider) {
-            if (!cfg.embedder_provider) {
-                return;
-            }
-        }
-
         const source = cfg.brain_source || 'catalog';
         const embedderSource = cfg.embedder_source || 'catalog';
-
-        ensureSetupProviderOption('chat-settings-provider-overlay', cfg.brain_provider, cfg.brain_model, source);
-        ensureSetupProviderOption('chat-settings-embedder-overlay', cfg.embedder_provider, cfg.embedder_model, embedderSource);
+        if (cfg.brain_provider) {
+            ensureSetupProviderOption('chat-settings-provider-overlay', cfg.brain_provider, cfg.brain_model, source);
+        }
+        if (cfg.embedder_provider) {
+            ensureSetupProviderOption('chat-settings-embedder-overlay', cfg.embedder_provider, cfg.embedder_model, embedderSource);
+        }
 
         const overlayURL = document.getElementById('chat-settings-url');
         const overlayEmbedder = document.getElementById('chat-settings-embedder-overlay');
@@ -783,10 +775,11 @@
         if (overlayURL) {
             overlayURL.value = cfg.brain_url || '';
         }
-        if (document.getElementById('chat-settings-provider-overlay')) {
+        const settingsLLMSelect = document.getElementById('chat-settings-provider-overlay');
+        if (settingsLLMSelect && cfg.brain_provider) {
             selectProviderOption(document.getElementById('chat-settings-provider-overlay'), buildProviderValue(cfg.brain_provider, cfg.brain_model), source);
         }
-        if (overlayEmbedder) {
+        if (overlayEmbedder && cfg.embedder_provider) {
             selectProviderOption(overlayEmbedder, buildProviderValue(cfg.embedder_provider, cfg.embedder_model), embedderSource);
         }
         if (overlayEmbedderURL) {
@@ -808,11 +801,130 @@
         if (overlayGeminiKey) {
             overlayGeminiKey.value = cfg.gemini_api_key || '';
         }
-
+        renderChatPreferredLLMOptions(aiConfig || {});
         toggleChatSettingsFields();
         if (typeof window.updateChatAttachmentOverflowVisibility === 'function') {
             window.updateChatAttachmentOverflowVisibility();
         }
+    }
+
+    function isChatPoolModelOptionAvailable(option, config) {
+        const parts = splitProviderValue(option.value || '');
+        if (!parts.provider) return false;
+        if (isLocalProviderValue(option.value)) return true;
+
+        const normalizedProvider = normalizeProviderSecretKey(parts.provider);
+        const poolKey = getProviderPoolInputValue('chat-settings', parts.provider);
+        const configKey = providerSecretField(parts.provider);
+        const envKey = findEnvProviderOption(parts.provider, parts.model)?.api_key || '';
+        const primaryKey = normalizeProviderSecretKey(config.brain_provider) === normalizedProvider
+            ? config.brain_api_key || ''
+            : '';
+        return !!(poolKey || (configKey && config[configKey]) || envKey || primaryKey);
+    }
+
+    function renderChatPreferredLLMOptions(aiConfig) {
+        const select = document.getElementById('chat-preferred-llm-select');
+        const sourceSelect = document.getElementById('chat-settings-provider-overlay');
+        if (!select || !sourceSelect) return;
+
+        const config = aiConfig || {};
+        const preferredValue = buildProviderValue(config.brain_provider, config.brain_model);
+        const optionByValue = new Map();
+        Array.from(sourceSelect.options).forEach(option => {
+            if (!option.value) return;
+            const current = optionByValue.get(option.value);
+            if (!current || option.dataset.injected === 'env') {
+                optionByValue.set(option.value, option);
+            }
+        });
+        const options = Array.from(optionByValue.values())
+            .filter(option => isChatPoolModelOptionAvailable(option, config) || option.value === preferredValue)
+            .sort((left, right) => {
+                const leftPreferred = left.value === preferredValue;
+                const rightPreferred = right.value === preferredValue;
+                if (leftPreferred !== rightPreferred) return leftPreferred ? -1 : 1;
+                const leftParts = splitProviderValue(left.value);
+                const rightParts = splitProviderValue(right.value);
+                const providerOrder = setupProviderLabel(leftParts.provider).localeCompare(setupProviderLabel(rightParts.provider));
+                return providerOrder || left.textContent.trim().localeCompare(right.textContent.trim());
+            });
+
+        const divider = select.querySelector('option[value="__pool_config_divider__"]');
+        const poolConfig = select.querySelector('option[value="__pool_config__"]');
+        select.replaceChildren();
+        if (options.length === 0) {
+            const empty = document.createElement('option');
+            empty.value = '__no_pool_models__';
+            empty.disabled = true;
+            empty.textContent = 'No configured LLM';
+            select.appendChild(empty);
+        } else {
+            options.forEach(option => {
+                const copy = option.cloneNode(true);
+                const parts = splitProviderValue(option.value);
+                const displayLabel = `${setupProviderLabel(parts.provider)} - ${option.textContent.trim()}`;
+                if (option.value === preferredValue) {
+                    copy.textContent = `Preferred - ${displayLabel}`;
+                } else {
+                    copy.textContent = displayLabel;
+                }
+                select.appendChild(copy);
+            });
+        }
+        if (divider) select.appendChild(divider);
+        else {
+            const separator = document.createElement('option');
+            separator.value = '__pool_config_divider__';
+            separator.disabled = true;
+            separator.textContent = '--------------------';
+            select.appendChild(separator);
+        }
+        if (poolConfig) select.appendChild(poolConfig);
+        else {
+            const configOption = document.createElement('option');
+            configOption.value = '__pool_config__';
+            configOption.textContent = 'Pool config';
+            select.appendChild(configOption);
+        }
+
+        if (options.some(option => option.value === preferredValue)) {
+            select.value = preferredValue;
+        } else if (options.length > 0) {
+            select.value = options[0].value;
+        } else {
+            select.value = '__no_pool_models__';
+        }
+    }
+
+    function handleChatPreferredLLMChange(select) {
+        if (!select) return;
+        if (select.value === '__pool_config__') {
+            const config = getStoredAIConfig();
+            select.value = buildProviderValue(config.brain_provider, config.brain_model) || '__no_pool_models__';
+            openChatPoolConfig();
+            return;
+        }
+        if (select.value === '__pool_config_divider__' || select.value === '__no_pool_models__') {
+            renderChatPreferredLLMOptions(getStoredAIConfig());
+            return;
+        }
+
+        const settingsSelect = document.getElementById('chat-settings-provider-overlay');
+        if (!settingsSelect) return;
+        const source = getSelectedProviderOptionSource('chat-preferred-llm-select');
+        selectProviderOption(settingsSelect, select.value, source);
+        handleChatSettingsProviderChange();
+    }
+
+    function openChatPoolConfig() {
+        const overlay = document.getElementById('chat-settings');
+        if (overlay?.style.display === 'none') {
+            toggleChatSettings();
+        }
+        requestAnimationFrame(() => {
+            document.getElementById('chat-settings-pool-config-heading')?.scrollIntoView({ block: 'start' });
+        });
     }
 
     function syncSetupWizardControlsFromAIConfig(aiConfig) {

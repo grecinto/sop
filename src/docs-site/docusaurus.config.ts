@@ -5,8 +5,8 @@ import type * as Preset from '@docusaurus/preset-classic';
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 const config: Config = {
-  title: 'Northstar Developer Docs',
-  tagline: 'SDK and Platform Documentation',
+  title: 'Northstar AI Developer Docs',
+  tagline: 'Northstar AI platform and Joltrin SDK documentation',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -64,7 +64,7 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Northstar Developer Docs',
+      title: 'Northstar AI Docs',
       logo: {
         alt: 'Northstar Logo',
         src: 'img/logo.svg',

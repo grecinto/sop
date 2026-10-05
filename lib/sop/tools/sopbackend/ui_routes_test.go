@@ -16,7 +16,7 @@ import (
 
 func TestUIRouterRegistersLoginRoute(t *testing.T) {
 	templateFS := fstest.MapFS{
-		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>SOP Login</h1></body></html>")},
+		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>AI Studio</h1></body></html>")},
 		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body>Index</body></html>")},
 	}
 	router := NewUIRouter(templateFS, "*.html")
@@ -31,8 +31,8 @@ func TestUIRouterRegistersLoginRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected login page to render with status 200, got %d", rec.Code)
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "SOP Login") {
-		t.Fatalf("expected login page body to contain SOP Login, got %q", got)
+	if got := rec.Body.String(); !strings.Contains(got, "AI Studio") {
+		t.Fatalf("expected login page body to contain AI Studio, got %q", got)
 	}
 }
 
@@ -59,8 +59,8 @@ func TestUIRouterFindsTemplatesWhenWorkingDirectoryChanges(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected login page to render with status 200 when cwd changes, got %d", rec.Code)
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "SOP Login") {
-		t.Fatalf("expected login page body to contain SOP Login, got %q", got)
+	if got := rec.Body.String(); !strings.Contains(got, "AI Studio") {
+		t.Fatalf("expected login page body to contain AI Studio, got %q", got)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestLandingPageDataExposesSystemDBNameForTemplates(t *testing.T) {
 
 func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
 	templateFS := fstest.MapFS{
-		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>SOP Login</h1></body></html>")},
+		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>AI Studio</h1></body></html>")},
 		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body>Index</body></html>")},
 	}
 	router := NewUIRouter(templateFS, "*.html")

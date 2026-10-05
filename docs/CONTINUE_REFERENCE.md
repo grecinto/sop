@@ -4,9 +4,9 @@
 
 ## Current Boundary
 
-The standard product flow is Data Manager Chat -> `/api/ask` -> SOP Ask/ReAct -> the `ideworker` capability -> configured backend. The backend-neutral contract is documented in [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md); the current Cline implementation and release checks are in [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
+The standard product flow is AI Studio Chat -> `/api/ask` -> Northstar AI Ask/ReAct -> the `ideworker` capability -> configured backend. The backend-neutral Joltrin SDK contract is documented in [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md); the current Northstar AI Cline implementation and release checks are in [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
 
-Continue's `/api/continue/*` endpoints and worker adapter are retained compatibility surfaces. They do not replace SOP Ask as the product controller, and no separate Continue action is exposed in the production chat composer.
+Continue's `/api/continue/*` endpoints and worker adapter are retained compatibility surfaces. They do not replace Northstar AI Ask as the product controller, and no separate Continue action is exposed in the AI Studio chat composer.
 
 The daemon mounts these compatibility routes only when `workflow_backend=continue` is explicitly selected. They are not available in the default Cline mode.
 

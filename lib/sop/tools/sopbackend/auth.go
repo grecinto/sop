@@ -1695,10 +1695,10 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 <html>
   <head>
     <meta charset="utf-8">
-    <title>SOP Login</title>
+	<title>AI Studio</title>
   </head>
   <body>
-    <h1>SOP Login</h1>
+	<h1>AI Studio</h1>
     <p>Please sign in.</p>
   </body>
 </html>`)

@@ -2,11 +2,13 @@ import { createInterface } from "node:readline";
 import { ClineCore, createTool } from "@cline/core";
 import type { CoreSessionEvent } from "@cline/core";
 import type { HostEvent, HostRequest, RunRequest } from "./protocol.js";
+import { createModelEscalationState, requestModelEscalation, restoreBaseModel, type ModelEscalationState } from "./model-escalation.js";
 
 const core = await ClineCore.create({ clientName: "sop-ai-studio" });
 const activeSessions = new Map<string, string>();
 const activeRuns = new Map<string, Promise<void>>();
-const sessions = new Map<string, { fingerprint: string; request: RunRequest }>();
+type HostSession = { fingerprint: string; request: RunRequest; activeRun?: ModelEscalationState };
+const sessions = new Map<string, HostSession>();
 
 function emit(event: HostEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -48,7 +50,7 @@ function subtractUsage(current?: UsageCounters, previous?: UsageCounters): Usage
   };
 }
 
-function normalizeResult(raw: any, usage?: { before?: UsageSummary; after?: UsageSummary }): Record<string, unknown> {
+function normalizeResult(raw: any, usage?: { before?: UsageSummary; after?: UsageSummary }, escalation?: ModelEscalationState, restoreError?: string): Record<string, unknown> {
   const finishReason = String(raw?.finishReason ?? "completed").toLowerCase();
   const status = ["completed", "success", "complete"].includes(finishReason)
     ? "completed"
@@ -67,6 +69,17 @@ function normalizeResult(raw: any, usage?: { before?: UsageSummary; after?: Usag
         task_usage: subtractUsage(usage.after.usage, usage.before?.usage),
         aggregate_task_usage: subtractUsage(usage.after.aggregateUsage, usage.before?.aggregateUsage),
       } : {}),
+      ...(escalation?.attempted ? {
+        model_escalation: {
+          from_model: escalation.baseModelId,
+          to_model: escalation.targetModelId,
+          reason: escalation.reason,
+          applied: escalation.applied,
+          restored: escalation.restored,
+          ...(escalation.error ? { error: escalation.error } : {}),
+          ...(restoreError ? { restore_error: restoreError } : {}),
+        },
+      } : {}),
     },
   };
 }
@@ -81,15 +94,28 @@ function guidancePrompt(request: RunRequest): string {
   ].join("\n");
 }
 
+function clineSystemPrompt(request: RunRequest): string {
+  const basePrompt = request.systemPrompt ?? "You are the coding copilot for AI Studio. Inspect the workspace, make the smallest correct change, run relevant validation, and report what changed.";
+  const escalationModel = configuredEscalationModelId();
+  if (!escalationModel || escalationModel === request.modelId) return basePrompt;
+  return `${basePrompt}\n\nA same-provider reasoning-tier escalation is configured to ${escalationModel}. If concrete repeated reasoning or progress failures show the current model is insufficient, you may call ai_studio_escalate_cline_model once and then continue this task. Do not use it for provider, network, authentication, or rate-limit errors.`;
+}
+
 function sessionFingerprint(request: RunRequest): string {
   return JSON.stringify({
     workspaceRoot: request.workspaceRoot,
     providerId: request.providerId,
     modelId: request.modelId,
+    escalationModelId: configuredEscalationModelId(),
     baseUrl: request.baseUrl,
     systemPrompt: request.systemPrompt,
     yolo: request.mode === "yolo",
   });
+}
+
+function configuredEscalationModelId(): string | undefined {
+  const modelId = process.env.SOP_CLINE_ESCALATION_MODEL_ID?.trim();
+  return modelId || undefined;
 }
 
 async function callAIStudioMCP(
@@ -121,9 +147,40 @@ async function callAIStudioMCP(
   return await response.json();
 }
 
-function createAIStudioTools(session: { request: RunRequest }, sessionId: string) {
-  if (!(session.request.mcpUrl ?? process.env.SOP_AI_STUDIO_MCP_URL)) return [];
+function createAIStudioTools(session: HostSession, sessionId: string) {
+  const escalationModel = session.activeRun?.targetModelId;
+  const escalationTool = escalationModel ? createTool({
+    name: "ai_studio_escalate_cline_model",
+    description: "Request one same-provider model escalation for this task only after concrete repeated reasoning or progress failure. Do not use for network, authentication, rate-limit, or other provider availability errors. The configured model is fixed by AI Studio and cannot be chosen by the agent.",
+    inputSchema: {
+      type: "object",
+      properties: { reason: { type: "string", minLength: 1, description: "Briefly state the concrete failure or lack of progress that warrants escalation." } },
+      required: ["reason"],
+    },
+    execute: async (input: { reason: string }) => {
+      const activeRun = session.activeRun;
+      if (!activeRun) return { status: "not_in_active_task" };
+      try {
+        const result = await requestModelEscalation(core, sessionId, activeRun, input.reason);
+        if (result.status === "escalated") {
+          emit({
+            type: "progress",
+            requestId: session.request.requestId,
+            sessionId,
+            message: `Cline model escalation: ${result.fromModelId} -> ${result.toModelId}`,
+          });
+        }
+        return result;
+      } catch (error) {
+        return { status: "failed", message: serializeError(error) };
+      }
+    },
+  }) : undefined;
+  const mcpURL = session.request.mcpUrl ?? process.env.SOP_AI_STUDIO_MCP_URL;
+  const localTools = escalationTool ? [escalationTool] : [];
+  if (!mcpURL) return localTools;
   return [
+    ...localTools,
     createTool({
       name: "ai_studio_get_task_guidance",
       description: "Retrieve authoritative AI Studio task guidance, phase context, and workspace context for this delegated task.",
@@ -207,6 +264,8 @@ async function run(request: RunRequest): Promise<void> {
     session = { fingerprint, request };
     sessions.set(sessionId, session);
   }
+  const activeRun = createModelEscalationState(request.modelId, configuredEscalationModelId());
+  session.activeRun = activeRun;
   activeSessions.set(request.requestId, sessionId);
   emit({ type: "started", requestId: request.requestId, sessionId, message: isNewSession ? "Starting Cline workstream session" : "Continuing Cline workstream session" });
 
@@ -239,7 +298,7 @@ async function run(request: RunRequest): Promise<void> {
           enableSpawnAgent: false,
           enableAgentTeams: false,
           yolo: request.mode === "yolo",
-          systemPrompt: request.systemPrompt ?? "You are the coding copilot for AI Studio. Inspect the workspace, make the smallest correct change, run relevant validation, and report what changed.",
+          systemPrompt: clineSystemPrompt(request),
           extraTools: createAIStudioTools(session, sessionId),
           checkpoint: { enabled: request.enableCheckpoints ?? true },
         },
@@ -251,6 +310,14 @@ async function run(request: RunRequest): Promise<void> {
         prompt: guidancePrompt(request),
         mode: request.mode === "plan" ? "plan" : "act",
       });
+    }
+    let restoreError: string | undefined;
+    try {
+      await restoreBaseModel(core, sessionId, activeRun);
+    } catch (error) {
+      restoreError = serializeError(error);
+      sessions.delete(sessionId);
+      emit({ type: "session_invalidated", requestId: request.requestId, sessionId, message: "Cline could not restore the configured base model after escalation; the session will be restarted before the next task." });
     }
     let usageAfter: UsageSummary | undefined;
     try {
@@ -265,9 +332,17 @@ async function run(request: RunRequest): Promise<void> {
       result: normalizeResult(
         rawResult ?? { finishReason: "completed", text: "Cline completed without a result payload." },
         usageAfter ? { before: usageBefore, after: usageAfter } : undefined,
+        activeRun,
+        restoreError,
       ),
     });
   } catch (error) {
+    try {
+      await restoreBaseModel(core, sessionId, activeRun);
+    } catch (restoreError) {
+      sessions.delete(sessionId);
+      emit({ type: "session_invalidated", requestId: request.requestId, sessionId, message: `Cline could not restore the configured base model after escalation: ${serializeError(restoreError)}` });
+    }
     if (error instanceof Error && error.name === "AbortError") {
       emit({ type: "cancelled", requestId: request.requestId, sessionId });
     } else {
@@ -278,6 +353,7 @@ async function run(request: RunRequest): Promise<void> {
       emit({ type: "error", requestId: request.requestId, sessionId, message: serializeError(error) });
     }
   } finally {
+    if (session.activeRun === activeRun) session.activeRun = undefined;
     unsubscribe();
     activeSessions.delete(request.requestId);
   }

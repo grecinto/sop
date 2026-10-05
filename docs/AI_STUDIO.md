@@ -1,6 +1,6 @@
-# AI Studio and Local Daemon
+# Northstar AI, AI Studio, and Local Daemon
 
-AI Studio is the shared Data Manager interface for SOP. It is served by `httpserver` or the daemon using shared `sopbackend` routes and templates. The React site is a separate account/onboarding surface that can launch the Data Manager in daemon mode.
+Northstar AI is the product/platform and React website for subscriptions, product information, and Joltrin SDK information. AI Studio is Northstar AI's Data Manager web UI, including the AI Chat window. It is served by `httpserver` or the daemon using shared `sopbackend` routes and templates. The Northstar AI website can launch AI Studio in daemon mode.
 
 ## Runtime Modes
 
@@ -8,7 +8,7 @@ AI Studio is the shared Data Manager interface for SOP. It is served by `httpser
 - **Daemon mode:** the Data Manager connects to a local SOP daemon, normally `http://127.0.0.1:9090`. The site grants access to the UI route for authenticated users; the daemon independently authenticates API requests.
 - The `daemon_url` query option can select a custom daemon URL. The rendered template safely escapes it for JavaScript.
 
-The daemon-mode launch URL is `/app?mode=daemon`. The React site's AI Studio link opens that shared Data Manager surface; it does not launch a second React chat implementation.
+The daemon-mode launch URL is `/app?mode=daemon`. The Northstar AI website's AI Studio link opens that shared Data Manager surface; it does not launch a second React chat implementation.
 
 ## Authentication Flow
 
@@ -18,17 +18,19 @@ Use the supported bootstrap and refresh endpoints rather than copying tokens bet
 
 ## Chat and Coding Delegation
 
-The normal AI Chat Send action calls `/api/ask`. SOP Ask/ReAct owns classification, capability routing, memory/context handling, and the outer workflow. For a suitable coding request, Ask can delegate one bounded task to the configured `ideworker.Backend`; the daemon defaults to the Cline SDK host.
+The normal AI Studio Chat Send action calls `/api/ask`. Northstar AI Ask/ReAct owns classification, capability routing, memory/context handling, and the outer workflow. For a suitable coding request, Ask can delegate one bounded task through the Joltrin `ideworker.Backend` contract; the daemon defaults to the Cline SDK host.
 
 ```text
 Data Manager Send
     -> /api/ask
-    -> SOP Ask/ReAct
+    -> Northstar AI Ask/ReAct
     -> optional bounded Cline SDK task
-    -> structured result, validation, and SOP undo history
+    -> structured result, validation, and Northstar AI undo history
 ```
 
-There is one production Send action. Direct `/api/cline/*` routes are for tests and diagnostics, not an alternate production controller. See [Cline SDK integration](CLINE_COPILOT_INTEGRATION_PLAN.md) and the [backend contract](IDE_COPILOT_BACKEND_SDK.md).
+There is one production Send action in AI Studio. Direct `/api/cline/*` routes are for tests and diagnostics, not an alternate production controller. See [Cline SDK integration](CLINE_COPILOT_INTEGRATION_PLAN.md) and the [backend contract](IDE_COPILOT_BACKEND_SDK.md).
+
+The AI Studio Chat header's **Preferred LLM** selector shows the current primary model and lets you change it for subsequent messages. The final **Pool config** option opens the provider-key settings; choosing a preferred model does not disable Northstar AI's configured fallback behavior.
 
 ## Privacy and Provider Keys
 

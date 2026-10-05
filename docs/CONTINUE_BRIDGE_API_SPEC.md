@@ -12,18 +12,20 @@ against the current daemon handlers before use.
 
 This document defines the native transport between Continue and AI Studio from Northstar AI.
 
+Terminology note: Northstar AI is the product/runtime, AI Studio is its HTTPServer-served Data Manager UI, and Joltrin is the core SDK. This retained compatibility specification preserves the historical SOP name where it appears in Go package paths and older contract terminology.
+
 In the default IDE integration, the AI Studio daemon remains the controller. Continue is an editor-facing participant that sends provider/model intent, workspace context, and bounded coding tasks into the daemon-owned Ask/ReAct runtime.
 
-The same Ask runtime can also be exposed in reverse as a participant for another controller. In that mode, Continue or another agent may act as the outer orchestrator while SOP Ask runs as a delegated worker through the typed participant contract in `ai/agent`.
+The same Northstar AI Ask runtime can also be exposed in reverse as a participant for another controller. In that mode, Continue or another agent may act as the outer orchestrator while Northstar AI Ask runs as a delegated worker through the Joltrin typed participant contract in `ai/agent`.
 
 ## Design Rules
 
 - Do not surface the daemon as an OpenAI-compatible provider.
 - Do not use `/v1/chat/completions`, `/v1/models`, or `/api/continue/config` as canonical integration points.
 - Provider and model are explicit request attributes on native Continue requests.
-- The daemon owns orchestration, workflow state, approvals, memory, and fallback behavior.
+- Northstar AI's daemon owns orchestration, workflow state, approvals, memory, and fallback behavior.
 - Continue may execute editor-aware subtasks, but only as a delegated worker.
-- The reverse-role mode is also supported: another controller may delegate a bounded Ask turn into SOP through `AskWithRequest`, `NewParticipantHandler`, or `ParticipantClient` without changing SOP's internal participant-pattern rules.
+- The reverse-role mode is also supported: another controller may delegate a bounded Ask turn into Northstar AI through `AskWithRequest`, `NewParticipantHandler`, or `ParticipantClient` without changing the internal participant-pattern rules.
 - The current Continue extension implements the Ask2Ask-style continuation flow: it persists HQ and daemon auth state in VS Code secret storage, rehydrates that state on startup, and refreshes or re-handshakes the session so restarts do not immediately break delegated AI Studio work.
 - Delegated Continue requests are intentionally task-scoped and single-turn. They should carry the current IDE subtask payload rather than depending on Continue conversation history, because the daemon and AI Studio remain the authoritative memory layer for prior Ask prompts and workflow state.
 
@@ -31,26 +33,26 @@ The same Ask runtime can also be exposed in reverse as a participant for another
 
 Two integration modes are valid.
 
-### Mode 1: SOP controls, Continue participates
+### Mode 1: Northstar AI controls, Continue participates
 
 This is the default bridge described throughout this document.
 
 - Continue calls daemon-native `/api/continue/*` routes.
-- SOP Ask remains the outer controller.
+- Northstar AI Ask remains the outer controller.
 - Continue receives delegated, bounded IDE execution work.
 
-### Mode 2: External controller, SOP Ask participates
+### Mode 2: External controller, Northstar AI Ask participates
 
 This is the reverse-role mode for SDK and agent reuse.
 
 - Another controller owns the outer workflow loop.
-- That controller delegates one bounded Ask turn into SOP.
-- SOP Ask still remains the controller of its own internal capability pipeline.
-- SOP may return either a final JSON response or an NDJSON event stream with progress, tool activity, content, final response, and done events.
+- That controller delegates one bounded Ask turn into Northstar AI.
+- Northstar AI Ask still remains the controller of its own internal capability pipeline.
+- Northstar AI may return either a final JSON response or an NDJSON event stream with progress, tool activity, content, final response, and done events.
 - The integration contract is the typed participant surface in `lib/sop/ai/agent`:
   - `Service.AskWithRequest(ctx, AskRequest)` for in-process embedding
-  - `NewParticipantHandler(...)` for exposing SOP Ask over HTTP
-  - `ParticipantClient` for calling a remote SOP Ask participant endpoint
+  - `NewParticipantHandler(...)` for exposing Northstar AI Ask over HTTP
+  - `ParticipantClient` for calling a remote Northstar AI Ask participant endpoint
   - `ParticipantClient.AskStream(...)` for consuming live NDJSON progress from that participant endpoint
 
 The key rule is that role reversal happens at the transport or embedding boundary, not inside the capability layer. Capabilities remain passive participants either way.
@@ -65,8 +67,8 @@ The typed participant contract also carries two request identity fields:
 Rules:
 
 - External controllers may provide both fields.
-- If `root_request_id` is absent when SOP delegates outward into another controller-aware worker, SOP generates a SOP-owned root id and propagates it.
-- If a participant request later enters SOP carrying a SOP-owned `root_request_id`, SOP must reject the request rather than re-entering the same controller loop.
+- If `root_request_id` is absent when Northstar AI delegates outward into another controller-aware worker, Northstar AI generates a Northstar AI-owned root id and propagates it.
+- If a participant request later enters Northstar AI carrying a Northstar AI-owned `root_request_id`, Northstar AI must reject the request rather than re-entering the same controller loop.
 
 This guard is definitive by identity, not heuristic by prompt or context state.
 

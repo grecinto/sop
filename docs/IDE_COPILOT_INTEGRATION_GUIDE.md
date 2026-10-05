@@ -2,20 +2,20 @@
 
 **Status:** Current developer guide. Cline SDK is the shipping daemon backend; Continue is retained as a compatibility reference. The shared contract and live source are authoritative if details change.
 
-This guide shows how to add another coding agent without replacing SOP Ask or creating a second chat path. For the exact Go types, see [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md). For the current Cline runtime setup, see [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
+This guide shows how to add another coding agent without replacing Northstar AI Ask or creating a second chat path. AI Studio is the HTTPServer-served Data Manager UI; Joltrin is the core Go SDK contract. For the exact Go types, see [IDE_COPILOT_BACKEND_SDK.md](IDE_COPILOT_BACKEND_SDK.md). For the current Cline runtime setup, see [CLINE_COPILOT_INTEGRATION_PLAN.md](CLINE_COPILOT_INTEGRATION_PLAN.md).
 
 ## Runtime Shape
 
 ```mermaid
 flowchart LR
-  USER[Data Manager Send] --> ASKAPI[/api/ask/]
-  ASKAPI --> ASK[SOP Ask/ReAct<br/>outer controller]
+  USER[AI Studio Send] --> ASKAPI[/api/ask/]
+  ASKAPI --> ASK[Northstar AI Ask/ReAct<br/>outer controller]
   ASK --> CAP[ideworker capability<br/>bounded delegation]
   CAP --> PORT[ideworker.Backend<br/>Go SDK contract]
   PORT --> ADAPTER[Configured backend adapter]
   ADAPTER --> AGENT[Agent SDK, process, or IDE callback]
   AGENT --> RESULT[ExecutionResult and workspace changes]
-  RESULT --> SOP[SOP history and canonical undo]
+  RESULT --> NORTHSTAR[Northstar AI history and canonical undo]
   ADAPTER -. "optional progress" .-> STREAM[Ask NDJSON event stream]
   STREAM --> USER
 ```
@@ -28,7 +28,7 @@ For the daemon, `workflow_backend=cline` makes Cline the exclusive repository-co
 
 Continue's legacy `/api/continue/*` routes are registered only when `workflow_backend=continue`; they are absent in Cline mode.
 
-Daemon selection is mutually exclusive: `workflow_backend=cline` (default), `continue`, or `native` for SOP's in-house coding phases. The old `daemon`/`shell` values alias `native`. Cline and Continue are fail-closed when their runtime/worker is unavailable; choose `native` explicitly to use the in-house executor.
+Daemon selection is mutually exclusive: `workflow_backend=cline` (default), `continue`, or `native` for Northstar AI's in-house coding phases. The old `daemon`/`shell` values alias `native`. Cline and Continue are fail-closed when their runtime/worker is unavailable; choose `native` explicitly to use the in-house executor.
 
 ## SDK Extension Boundary
 
@@ -41,7 +41,7 @@ copilot.InjectIDEWorkerBackend(myBackend)
 
 `newConfiguredIDEWorkerBackend` is daemon deployment wiring that chooses the shipped backend; it is not a public plugin-discovery API. The Cline host's stdin/stdout NDJSON and Continue's callback routes are adapter transports, not stable wire contracts that third-party backends must implement. External agents still need a Go adapter that maps their protocol to `ideworker.Backend`.
 
-MCP has a narrower role in the current Cline integration: the Cline host is an MCP client of SOP's authenticated `/mcp` server for guidance, memory, undo, validation, and restore tools. SOP does not invoke Cline through MCP, and MCP is not the backend registration or delegation protocol here.
+MCP has a narrower role in the current Cline integration: the Cline host is an MCP client of Northstar AI's authenticated `/mcp` server for guidance, memory, undo, validation, and restore tools. Northstar AI does not invoke Cline through MCP, and MCP is not the backend registration or delegation protocol here.
 
 ### Contract Tradeoffs
 
@@ -61,19 +61,19 @@ Use Cline as the current end-to-end example. Continue is useful when studying an
 
 ### Cline: SDK Execution and MCP Tools
 
-The task lifecycle and SOP tool access are separate channels. SOP delegates through the Go backend contract and private host pipes; Cline uses MCP only when it calls SOP-provided tools.
+The task lifecycle and Northstar AI tool access are separate channels. Northstar AI delegates through the Joltrin Go backend contract and private host pipes; Cline uses MCP only when it calls Northstar AI tools.
 
 ```mermaid
 sequenceDiagram
-  participant Ask as SOP Ask
+  participant Ask as Northstar AI Ask
   participant Backend as Cline ideworker.Backend
   participant Host as Cline SDK host
   participant Core as ClineCore
-  participant MCP as SOP MCP server
+  participant MCP as Northstar AI MCP server
   Ask->>Backend: ExecuteTask(TaskRequest)
   Backend->>Host: run request over stdin
   Host->>Core: start first task, send follow-ups
-  Core->>MCP: tools/call for SOP guidance or memory
+  Core->>MCP: tools/call for Northstar AI guidance or memory
   MCP-->>Core: tool result
   Core-->>Host: progress and task result
   Host-->>Backend: NDJSON events over stdout
@@ -87,7 +87,7 @@ This retained path executes inside the IDE extension. It is useful as a callback
 
 ```mermaid
 sequenceDiagram
-  participant Ask as SOP Ask
+  participant Ask as Northstar AI Ask
   participant Backend as Continue backend
   participant Registry as Daemon worker registration
   participant IDE as Continue extension

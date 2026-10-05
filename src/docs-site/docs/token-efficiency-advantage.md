@@ -2,11 +2,11 @@
 sidebar_position: 5
 ---
 
-# Why AI Studio Uses Fewer Tokens
+# Why Northstar AI Uses Fewer Tokens
 
-AI Studio is designed to make each turn **context-dense** instead of repeatedly paying prompt cost for the entire assistant surface.
+Northstar AI is designed to make each turn **context-dense** instead of repeatedly paying prompt cost for the entire assistant surface.
 
-That gives it an architectural advantage over broad app-layer controller patterns. In multi-step tasks, SOP Ask keeps the outer control loop focused while the Cline SDK backend handles only its bounded coding slice.
+That gives it an architectural advantage over broad app-layer controller patterns. In multi-step tasks, Northstar AI Ask keeps the outer control loop focused while the Cline SDK backend handles only its bounded coding slice.
 
 The important qualifier is that this is an architectural claim, not a universal benchmark. Exact savings depend on the model, provider, and task shape.
 
@@ -22,9 +22,9 @@ Most coding assistants spend extra tokens in one or more of these ways:
 
 Those costs add up quickly in long debugging, refactoring, and implementation workflows.
 
-## How AI Studio Reduces That Cost
+## How Northstar AI Reduces That Cost
 
-AI Studio reduces token spend through several layers that work together.
+Northstar AI reduces token spend through several layers that work together.
 
 ### 1. Phase narrowing
 
@@ -36,13 +36,13 @@ Investigation, Planning, Execution, Review, and Delivery each foreground the act
 
 The system also narrows the active domain surface.
 
-Instead of paying prompt budget for every platform capability on every turn, AI Studio can reason inside the relevant slice of the product. The active context is smaller, but still aligned with the real task.
+Instead of paying prompt budget for every platform capability on every turn, Northstar AI can reason inside the relevant slice of the product. The active context is smaller, but still aligned with the real task.
 
 ### 3. Recovery without a separate simplified mode
 
 Many assistants waste tokens when execution goes off course. They keep retrying blindly or force the user into a separate "plan mode" experience.
 
-AI Studio keeps one orchestration model and recovers inside it:
+Northstar AI keeps one orchestration model and recovers inside it:
 
 - move back to Investigation when more evidence is needed
 - move back to Planning when the design changed
@@ -55,7 +55,7 @@ That saves tokens by avoiding wrong-phase continuation.
 
 Localized changes should not require whole-file rewrites.
 
-AI Studio is designed to prefer compact edit contracts such as diffs, bounded replacements, and narrow selection-aware changes before falling back to broad file regeneration. That lowers token cost and usually produces cleaner edits.
+Northstar AI is designed to prefer compact edit contracts such as diffs, bounded replacements, and narrow selection-aware changes before falling back to broad file regeneration. That lowers token cost and usually produces cleaner edits.
 
 ### 5. Scoped context trimming
 
@@ -66,13 +66,13 @@ The highest-value editor context is usually:
 3. selection range
 4. the most relevant open files
 
-By biasing toward the highest-signal context first, AI Studio avoids paying prompt cost for low-value surrounding noise.
+By biasing toward the highest-signal context first, Northstar AI avoids paying prompt cost for low-value surrounding noise.
 
 ### 6. Stable prompt prefixes for provider caching
 
 Prompt caching works best when stable instructions stay stable.
 
-AI Studio is designed to keep core instructions, tool definitions, and policy blocks ahead of volatile request context so provider-side caching has a better chance to help across turns.
+Northstar AI is designed to keep core instructions, tool definitions, and policy blocks ahead of volatile request context so provider-side caching has a better chance to help across turns.
 
 ### 7. Compact tool results
 
@@ -82,9 +82,9 @@ When results can be returned as bounded summaries, diffs, or artifact references
 
 ## Comparison Framing
 
-The difference is not that AI Studio has a smaller feature set. The difference is that it tries to keep the **active** feature set narrower on each turn.
+The difference is not that Northstar AI has a smaller feature set. The difference is that it tries to keep the **active** feature set narrower on each turn.
 
-| Concern | Broad app-layer controller pattern | AI Studio approach |
+| Concern | Broad app-layer controller pattern | Northstar AI approach |
 | --- | --- | --- |
 | Tool exposure | Large tool surface can stay active across turns | Phase and domain narrowing reduce active tool surface |
 | Recovery | Blind retries or separate simplified planning mode | Move backward, pause for clarification, or stop cleanly |
@@ -96,7 +96,7 @@ This is why we expect the Ask-owned workflow to reduce repeated orchestration co
 
 ## How Cline Fits Into This
 
-The Data Manager sends through SOP Ask. Ask keeps orchestration, memory, policy, and workstream state; when appropriate it delegates one bounded coding task to the daemon-managed Cline SDK backend. This avoids a second production chat controller while allowing Cline's agent loop to focus on the coding task.
+The AI Studio Data Manager sends through Northstar AI Ask. Ask keeps orchestration, memory, policy, and workstream state; when appropriate it delegates one bounded coding task to the daemon-managed Cline SDK backend. This avoids a second production chat controller while allowing Cline's agent loop to focus on the coding task.
 
 ## Why Customers Should Care
 
@@ -114,4 +114,4 @@ For customers evaluating coding assistants, this means the relevant question is 
 - [Workflow Architecture](./sdk/workflow-architecture)
 - [Coding Workflows](./user-guide/coding-workflows)
 - [IDE Copilot Backends](./sdk/ide-copilot-backend)
-- [AI Studio Memory Advantage](./ai-studio-memory-advantage)
+- [Northstar AI Memory Advantage](./ai-studio-memory-advantage)

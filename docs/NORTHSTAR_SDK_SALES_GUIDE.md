@@ -1,4 +1,4 @@
-# Northstar AI SDK - Sales & Marketing Quick Reference
+# Northstar AI and Joltrin SDK - Sales & Marketing Quick Reference
 
 ## Elevator Pitch (30 seconds)
 

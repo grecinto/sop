@@ -356,9 +356,9 @@ non-shipping Continue bridge. It is not the Cline SDK authentication flow.
 Continue compatibility details are in [CONTINUE_REFERENCE.md](CONTINUE_REFERENCE.md)
 and [CONTINUE_BRIDGE_API_SPEC.md](CONTINUE_BRIDGE_API_SPEC.md).
 
-For the current Data Manager -> SOP Ask -> Cline SDK path, the daemon validates
+For the current AI Studio -> Northstar AI Ask -> Cline SDK path, the daemon validates
 its own bearer session. The Cline host receives the scoped task/provider context
-from the daemon and calls authenticated SOP MCP tools using the daemon-provided
+from the daemon and calls authenticated Northstar AI MCP tools using the daemon-provided
 token. Do not pass HQ credentials to the Cline host or confuse provider API keys
 with daemon authentication.
 
