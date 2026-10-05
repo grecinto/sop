@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop/ai"
@@ -197,16 +198,11 @@ type AskResponse struct {
 }
 
 type runtimeProviderCandidate struct {
-	Provider          string
-	APIKey            string
-	Model             string
-	URL               string
-	UpdatedAtMS       int64
-	SuccessCount      int
-	FailureCount      int
-	LastSuccessAtMS   int64
-	LastFailureAtMS   int64
-	LastValidatedAtMS int64
+	Provider    string
+	APIKey      string
+	Model       string
+	URL         string
+	UpdatedAtMS int64
 }
 
 func runtimeCandidatePreferenceRank(provider string) int {
@@ -226,7 +222,7 @@ func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[str
 	ordered := make([]runtimeProviderCandidate, 0, 8)
 	seen := make(map[string]struct{})
 
-	add := func(p, k, m, u string, updatedAtMS int64, successCount int, failureCount int, lastSuccessAtMS int64, lastFailureAtMS int64, lastValidatedAtMS int64) {
+	add := func(p, k, m, u string, updatedAtMS int64) {
 		normalizedProvider := normalizeCredentialProviderKey(p)
 		if normalizedProvider == "" {
 			return
@@ -240,34 +236,29 @@ func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[str
 			return
 		}
 		ordered = append(ordered, runtimeProviderCandidate{
-			Provider:          normalizedProvider,
-			APIKey:            strings.TrimSpace(k),
-			Model:             normalizedModel,
-			URL:               strings.TrimSpace(u),
-			UpdatedAtMS:       updatedAtMS,
-			SuccessCount:      successCount,
-			FailureCount:      failureCount,
-			LastSuccessAtMS:   lastSuccessAtMS,
-			LastFailureAtMS:   lastFailureAtMS,
-			LastValidatedAtMS: lastValidatedAtMS,
+			Provider:    normalizedProvider,
+			APIKey:      strings.TrimSpace(k),
+			Model:       normalizedModel,
+			URL:         strings.TrimSpace(u),
+			UpdatedAtMS: updatedAtMS,
 		})
 		seen[key] = struct{}{}
 	}
 
-	add(provider, apiKey, model, url, 0, 0, 0, 0, 0, 0)
+	add(provider, apiKey, model, url, 0)
 
 	for _, candidate := range []string{"openai", "anthropic", "gemini"} {
 		cred, ok := pool[candidate]
 		if !ok {
 			continue
 		}
-		add(candidate, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS, cred.SuccessCount, cred.FailureCount, cred.LastSuccessAtMS, cred.LastFailureAtMS, cred.LastValidatedAtMS)
+		add(candidate, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS)
 	}
 	for providerName, cred := range pool {
 		if providerName == "" {
 			continue
 		}
-		add(providerName, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS, cred.SuccessCount, cred.FailureCount, cred.LastSuccessAtMS, cred.LastFailureAtMS, cred.LastValidatedAtMS)
+		add(providerName, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS)
 	}
 
 	if len(ordered) <= 1 {
@@ -286,6 +277,10 @@ func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[str
 }
 
 func runtimeCandidateSortValue(a, b runtimeProviderCandidate, thinkingLevel string) int {
+	// Selection is based on explicit primary choice, task eligibility, static provider
+	// preference, configured credential recency, and catalog cost/capability only.
+	// Runtime success/failure feedback is intentionally excluded so transient errors
+	// cannot silently lower the future quality of the selected pool.
 	if strings.TrimSpace(a.Provider) == "" || strings.TrimSpace(a.Model) == "" {
 		return 1
 	}
@@ -310,31 +305,6 @@ func runtimeCandidateSortValue(a, b runtimeProviderCandidate, thinkingLevel stri
 	prefB := runtimeCandidatePreferenceRank(b.Provider)
 	if prefA != prefB {
 		return prefA - prefB
-	}
-
-	if a.SuccessCount != b.SuccessCount {
-		if a.SuccessCount > b.SuccessCount {
-			return -1
-		}
-		return 1
-	}
-	if a.FailureCount != b.FailureCount {
-		if a.FailureCount < b.FailureCount {
-			return -1
-		}
-		return 1
-	}
-	if a.LastSuccessAtMS != b.LastSuccessAtMS {
-		if a.LastSuccessAtMS == 0 {
-			return 1
-		}
-		if b.LastSuccessAtMS == 0 {
-			return -1
-		}
-		if a.LastSuccessAtMS > b.LastSuccessAtMS {
-			return -1
-		}
-		return 1
 	}
 
 	if a.UpdatedAtMS != b.UpdatedAtMS {
@@ -572,11 +542,35 @@ type continueTextEdit struct {
 }
 
 type localRAGService struct {
-	service         ai.Agent[map[string]any]
-	shellSessions   *ptyShellSessionManager
-	continueState   *continueBridgeSessionStore
-	continueWorkers *continueBridgeWorkerStore
-	clineBackend    ideworker.Backend
+	service             ai.Agent[map[string]any]
+	shellSessions       *ptyShellSessionManager
+	continueState       *continueBridgeSessionStore
+	continueWorkers     *continueBridgeWorkerStore
+	clineTaskContextsMu sync.Mutex
+	clineTaskContexts   *clineTaskContextStore
+	clineBackend        ideworker.Backend
+}
+
+func (s *localRAGService) ensureClineTaskContextStore() *clineTaskContextStore {
+	if s == nil {
+		return nil
+	}
+	s.clineTaskContextsMu.Lock()
+	defer s.clineTaskContextsMu.Unlock()
+	if s.clineTaskContexts == nil {
+		s.clineTaskContexts = &clineTaskContextStore{contexts: make(map[string]clineTaskContext)}
+	}
+	return s.clineTaskContexts
+}
+
+func (s *localRAGService) Close() error {
+	if s == nil || s.clineBackend == nil {
+		return nil
+	}
+	if closer, ok := s.clineBackend.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 var globalShellSessionManager = newPTYShellSessionManager()
@@ -1729,6 +1723,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	ctx = context.WithValue(ctx, "session_payload", payload)
 	// Inject streaming support into context (same as HQ's /api/ai/chat)
 	ctx = sopbackend.InjectSharedRuntimeContext(ctx, sendEvent, w)
+	mcpURL, mcpBearerToken := clineMCPContext(r)
+	ctx = context.WithValue(ctx, ai.CtxKeyMCPURL, mcpURL)
+	ctx = context.WithValue(ctx, ai.CtxKeyMCPBearerToken, mcpBearerToken)
 	// Inject DirectFlushingWriter for additional flushing during execution
 	ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
 	log.Printf("Daemon: streaming context injected, sendEvent=%v", sendEvent != nil)

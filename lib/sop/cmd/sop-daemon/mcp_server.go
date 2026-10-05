@@ -113,7 +113,7 @@ func mcpToolDefinitions() []any {
 		map[string]any{
 			"name":        "get_task_guidance",
 			"description": "Return AI Studio guidance and current delegated task context for a Cline session.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string"}}},
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string"}, "workstream_id": map[string]any{"type": "string"}}},
 		},
 		map[string]any{
 			"name":        "search_memory",
@@ -123,17 +123,17 @@ func mcpToolDefinitions() []any {
 		map[string]any{
 			"name":        "search_undo_history",
 			"description": "Search AI Studio's canonical undo transactions without modifying the workspace.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "query": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}}, "required": []string{"workspace_root"}},
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "workstream_id": map[string]any{"type": "string"}, "query": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}}, "required": []string{"workspace_root"}},
 		},
 		map[string]any{
 			"name":        "record_validation",
 			"description": "Record test, build, or validation results in the AI Studio task context.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"}}, "required": []string{"session_id", "status", "summary"}},
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string"}, "workstream_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"}}, "required": []string{"session_id", "status", "summary"}},
 		},
 		map[string]any{
 			"name":        "restore_undo_transaction",
 			"description": "Restore a canonical AI Studio undo transaction. This mutates workspace files and requires explicit confirmation.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "transaction_id": map[string]any{"type": "string"}, "confirm": map[string]any{"type": "boolean"}}, "required": []string{"workspace_root", "session_id", "transaction_id", "confirm"}},
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"workspace_root": map[string]any{"type": "string"}, "session_id": map[string]any{"type": "string"}, "workstream_id": map[string]any{"type": "string"}, "transaction_id": map[string]any{"type": "string"}, "confirm": map[string]any{"type": "boolean"}}, "required": []string{"workspace_root", "session_id", "transaction_id", "confirm"}},
 		},
 	}
 }
@@ -201,10 +201,34 @@ func mcpSearchUndoHistory(ctx context.Context, arguments map[string]any) (string
 }
 
 func mcpTaskGuidance(service *localRAGService, arguments map[string]any) (string, error) {
+	if service == nil {
+		return "", fmt.Errorf("AI Studio session service is unavailable")
+	}
 	sessionID, _ := arguments["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
+	workstreamID, _ := arguments["workstream_id"].(string)
+	workstreamID = strings.TrimSpace(workstreamID)
 	if sessionID == "" {
 		return "No session_id was provided; no task-scoped guidance is available.", nil
+	}
+	if workstreamID != "" {
+		taskContext, ok := service.ensureClineTaskContextStore().Get(workstreamID, sessionID)
+		if !ok {
+			return fmt.Sprintf("No Cline task context is available for workstream %q.", workstreamID), nil
+		}
+		payload := map[string]any{
+			"session_id": taskContext.SessionID, "workstream_id": taskContext.WorkstreamID,
+			"request_id": taskContext.RequestID, "status": taskContext.Status,
+			"phase": taskContext.Phase, "mode": taskContext.Mode, "task": taskContext.Task,
+			"workspace_root": taskContext.WorkspaceRoot, "active_file": taskContext.ActiveFile,
+			"selected_text": taskContext.SelectedText, "open_files": taskContext.OpenFiles,
+			"validation": taskContext.Validation,
+		}
+		encoded, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("encode Cline task guidance: %w", err)
+		}
+		return string(encoded), nil
 	}
 	snapshot, ok := service.ensureContinueSessionStore().Get(sessionID)
 	if !ok {
@@ -231,8 +255,13 @@ func mcpTaskGuidance(service *localRAGService, arguments map[string]any) (string
 }
 
 func mcpRecordValidation(service *localRAGService, arguments map[string]any) (string, error) {
+	if service == nil {
+		return "", fmt.Errorf("AI Studio session service is unavailable")
+	}
 	sessionID, _ := arguments["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
+	workstreamID, _ := arguments["workstream_id"].(string)
+	workstreamID = strings.TrimSpace(workstreamID)
 	if sessionID == "" {
 		return "", fmt.Errorf("session_id is required")
 	}
@@ -241,13 +270,23 @@ func mcpRecordValidation(service *localRAGService, arguments map[string]any) (st
 	if strings.TrimSpace(status) == "" || strings.TrimSpace(summary) == "" {
 		return "", fmt.Errorf("status and summary are required")
 	}
-	snapshot, ok := service.ensureContinueSessionStore().Get(sessionID)
-	if !ok {
-		return "", fmt.Errorf("session %q was not found", sessionID)
-	}
 	validation := map[string]any{"status": strings.TrimSpace(status), "summary": strings.TrimSpace(summary)}
 	if command, ok := arguments["command"].(string); ok && strings.TrimSpace(command) != "" {
 		validation["command"] = strings.TrimSpace(command)
+	}
+	if workstreamID != "" {
+		if _, ok := service.ensureClineTaskContextStore().RecordValidation(workstreamID, sessionID, validation); !ok {
+			return "", fmt.Errorf("Cline workstream %q was not found for session %q", workstreamID, sessionID)
+		}
+		encoded, err := json.MarshalIndent(validation, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("encode validation: %w", err)
+		}
+		return string(encoded), nil
+	}
+	snapshot, ok := service.ensureContinueSessionStore().Get(sessionID)
+	if !ok {
+		return "", fmt.Errorf("session %q was not found", sessionID)
 	}
 	snapshot.Validation = validation
 	service.ensureContinueSessionStore().Put(snapshot)
@@ -275,22 +314,41 @@ func mcpRestoreUndoTransaction(ctx context.Context, service *localRAGService, ar
 	}
 	sessionID, _ := arguments["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
+	workstreamID, _ := arguments["workstream_id"].(string)
+	workstreamID = strings.TrimSpace(workstreamID)
 	if sessionID == "" {
 		return "", fmt.Errorf("session_id is required for restore authorization")
 	}
 	if service == nil {
 		return "", fmt.Errorf("AI Studio session service is unavailable")
 	}
-	snapshot, ok := service.ensureContinueSessionStore().Get(sessionID)
-	if !ok {
-		return "", fmt.Errorf("session %q was not found", sessionID)
+	clineContext, isClineContext := service.ensureClineTaskContextStore().Get(workstreamID, sessionID)
+	continueSnapshot := continueSessionSnapshot{}
+	sessionWorkspace := ""
+	if isClineContext {
+		sessionWorkspace = clineContext.WorkspaceRoot
+	} else {
+		if workstreamID != "" {
+			return "", fmt.Errorf("Cline workstream %q was not found for session %q", workstreamID, sessionID)
+		}
+		var ok bool
+		continueSnapshot, ok = service.ensureContinueSessionStore().Get(sessionID)
+		if !ok {
+			return "", fmt.Errorf("session %q was not found", sessionID)
+		}
+		sessionWorkspace = continueSnapshot.WorkspaceRoot
 	}
 	requestedRoot, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve workspace_root: %w", err)
 	}
-	sessionRoot, err := filepath.Abs(strings.TrimSpace(snapshot.WorkspaceRoot))
-	if err != nil || strings.TrimSpace(snapshot.WorkspaceRoot) == "" || requestedRoot != sessionRoot {
+	sessionRoot, err := filepath.Abs(strings.TrimSpace(sessionWorkspace))
+	if err != nil || strings.TrimSpace(sessionWorkspace) == "" || requestedRoot != sessionRoot {
+		return "", fmt.Errorf("workspace_root is not authorized for session %q", sessionID)
+	}
+	requestedRoot, _ = filepath.EvalSymlinks(requestedRoot)
+	sessionRoot, _ = filepath.EvalSymlinks(sessionRoot)
+	if requestedRoot == "" || sessionRoot == "" || requestedRoot != sessionRoot {
 		return "", fmt.Errorf("workspace_root is not authorized for session %q", sessionID)
 	}
 	manager, err := getContinueUndoManager(sessionID, workspaceRoot)
@@ -300,9 +358,13 @@ func mcpRestoreUndoTransaction(ctx context.Context, service *localRAGService, ar
 	if err := manager.RestoreTransaction(ctx, transactionID, codingworkflow.RestoreOptions{Mode: codingworkflow.RestoreFull, CreateBackup: true, VerifyHashes: true, ConfirmPrompt: true}); err != nil {
 		return "", fmt.Errorf("restore undo transaction: %w", err)
 	}
-	snapshot.Status = "stale"
-	snapshot.Message = "Workspace restored by AI Studio; refresh the Cline session before continuing."
-	service.ensureContinueSessionStore().Put(snapshot)
+	if isClineContext {
+		service.ensureClineTaskContextStore().MarkStale(workstreamID, sessionID, "Workspace restored by AI Studio; refresh the Cline session before continuing.")
+	} else {
+		continueSnapshot.Status = "stale"
+		continueSnapshot.Message = "Workspace restored by AI Studio; refresh the Continue session before continuing."
+		service.ensureContinueSessionStore().Put(continueSnapshot)
+	}
 	return fmt.Sprintf("restored undo transaction %s; associated Cline session is stale and must be refreshed", transactionID), nil
 }
 

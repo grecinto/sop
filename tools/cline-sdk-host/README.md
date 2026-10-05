@@ -9,7 +9,7 @@ the host emits newline-delimited JSON lifecycle events on stdout.
 Run a task:
 
 ```json
-{"type":"run","requestId":"req-1","sessionId":"session-1","task":"Run the failing tests and fix the implementation","workspaceRoot":"/path/to/repo","providerId":"openai","modelId":"gpt-5","apiKey":"...","mode":"act","guidance":{"successCriteria":["Tests pass"]}}
+{"type":"run","requestId":"req-1","sessionId":"sop-session-1","clineSessionId":"cline-workstream-1","task":"Run the failing tests and fix the implementation","workspaceRoot":"/path/to/repo","providerId":"openai","modelId":"gpt-5","apiKey":"...","mode":"act","guidance":{"successCriteria":["Tests pass"]}}
 ```
 
 Cancel a task:
@@ -24,8 +24,14 @@ Stop the host:
 {"type":"shutdown"}
 ```
 
-The host emits `started`, `progress`, `result`, `error`, `cancelled`, and
-`stopped` events. The result is normalized into a status/summary/metadata
+The host emits `started`, `progress`, `result`, `error`, `cancelled`,
+`session_invalidated`, and `stopped` events. The first run for a `clineSessionId`
+uses `core.start()`; later runs for that same session use `core.send()`. Keep the
+host alive between same-workstream tasks. The daemon provides one host per
+workstream and workspace/provider configuration, serializes requests to it,
+expires idle hosts, and starts with fresh sessions after daemon restart. A
+confirmed SOP restore emits `session_invalidated`; the daemon then retires that
+host before accepting the next task. The result is normalized into a status/summary/metadata
 payload; the daemon adapter converts it into `ideworker.ExecutionResult`, adds
 workspace diff data, and records the task through SOP's shared undo and
 execution-memory pipeline.
@@ -53,7 +59,7 @@ and build it from this directory:
 ```sh
 npm install
 npm run build
-printf '%s\n' '{"type":"run","requestId":"req-1","task":"Inspect the tests and report the first failure","workspaceRoot":"/tmp/repo","providerId":"openai","modelId":"gpt-5"}' | npm start
+printf '%s\n' '{"type":"run","requestId":"req-1","clineSessionId":"cline-workstream-1","task":"Inspect the tests and report the first failure","workspaceRoot":"/tmp/repo","providerId":"openai","modelId":"gpt-5"}' | npm start
 ```
 
 Create a deployable host directory:
@@ -62,5 +68,13 @@ Create a deployable host directory:
 ./package-runtime.sh /path/to/release/cline-sdk-host
 ```
 
-The host boundary carries session and request identity so MCP calls are scoped
-to the same SOP workflow.
+The host boundary carries separate SOP session, Cline session, and request
+identities so MCP calls are scoped to the same SOP workflow without sharing
+Cline conversation state across unrelated workstreams. This host uses pipes;
+PTY remains reserved for terminal interaction and the explicit CLI fallback.
+
+After each task, the host best-effort reads Cline's accumulated usage before and
+after the turn. Result metadata reports task deltas and session totals for both
+root and aggregate usage, including input/output/cache tokens and total cost.
+Failure to read usage does not fail the task. Workspace diffs and completeness
+metadata are added by the Go daemon adapter, not by this host.

@@ -375,6 +375,15 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	}
 
 	sessionID := a.logAskStart(ctx, query, gen)
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		if payload.Variables == nil {
+			payload.Variables = make(map[string]any)
+		}
+		delete(payload.Variables, "sop_workstream_id")
+		if thread := a.currentConversationThread(); thread != nil {
+			payload.Variables["sop_workstream_id"] = thread.ID.String()
+		}
+	}
 
 	// 2. Query preprocessing (same as V1)
 	rawQuery := query
@@ -399,6 +408,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	}
 	taskContext = a.applyQueuedPhaseActorContext(ctx, taskContext, persistedAskCtx)
 	taskContext = normalizeCodingRuntimeRouting(taskContext)
+	codingDelegated := a.ideWorkerOwnsCodingWorkflow() && taskContext.AskClassification != nil && askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow")
 	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
 	if req := buildDefaultDomainOfferClarification(query, taskContext); req != nil {
 		a.updateClarificationState(ctx, query, "", nil, req)
@@ -497,6 +507,9 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 
 		// Register phase tools with ReAct
 		a.registerPhaseTools(ctx, tools, phases, askCtx)
+		if a.ideWorkerOwnsCodingWorkflow() && askClassificationHasDomain(askCtx.Domains, "coding_workflow") {
+			a.registerCapabilityTools(ctx)
+		}
 		log.Info("Phase tools registered successfully")
 	}
 
@@ -515,8 +528,10 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if err != nil {
 		return "", err
 	}
-	a.updateStructuredPlanProgressAfterTurn(taskContext.AskClassification, toolCalls, outcomeFacts, clarificationRequest)
-	a.enqueueStructuredPlanContinuationAfterTurn(query, taskContext.AskClassification, previousStructuredPlanStep, clarificationRequest)
+	if !codingDelegated {
+		a.updateStructuredPlanProgressAfterTurn(taskContext.AskClassification, toolCalls, outcomeFacts, clarificationRequest)
+		a.enqueueStructuredPlanContinuationAfterTurn(query, taskContext.AskClassification, previousStructuredPlanStep, clarificationRequest)
+	}
 	a.refreshSessionCognitiveAssessment(ctx, query, taskContext.CapabilityHint, finalText, toolCalls, escalationState, clarificationRequest, gen)
 	finalText = appendAskCompletionSummary(ctx, finalText, toolCalls, outcomeFacts)
 	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
@@ -536,14 +551,16 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		}
 		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
-	a.maybePersistPlanningArtifactFromFinalText(taskContext.AskClassification, finalText, toolCalls)
-	transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
-	log.Info("Phase transaction decision",
-		"enqueue_next", transactionDecision.EnqueueNextPhase,
-		"next_phase", transactionDecision.NextPhase,
-		"reason", transactionDecision.Reason)
-	a.persistPhaseTransactionHandoff(rawQuery, taskContext.AskClassification, transactionDecision, toolCalls, outcomeFacts, finalText)
-	a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
+	if !codingDelegated {
+		a.maybePersistPlanningArtifactFromFinalText(taskContext.AskClassification, finalText, toolCalls)
+		transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
+		log.Info("Phase transaction decision",
+			"enqueue_next", transactionDecision.EnqueueNextPhase,
+			"next_phase", transactionDecision.NextPhase,
+			"reason", transactionDecision.Reason)
+		a.persistPhaseTransactionHandoff(rawQuery, taskContext.AskClassification, transactionDecision, toolCalls, outcomeFacts, finalText)
+		a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
+	}
 
 	// Truncate finalText for logging
 	finalTextPreview := finalText
@@ -1072,6 +1089,9 @@ func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string,
 
 	// Create phase proxy for each domain
 	for _, domain := range domains {
+		if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") && a.ideWorkerOwnsCodingWorkflow() && classification != nil && askClassificationHasDomain(classification.Domains, "coding_workflow") {
+			continue
+		}
 		for _, phaseID := range resolveDomainToolPhases(domain, currentPhase, classification) {
 			log.Info("Creating phase proxy",
 				"domain", domain,

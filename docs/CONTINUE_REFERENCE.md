@@ -8,6 +8,10 @@ The standard product flow is Data Manager Chat -> `/api/ask` -> SOP Ask/ReAct ->
 
 Continue's `/api/continue/*` endpoints and worker adapter are retained compatibility surfaces. They do not replace SOP Ask as the product controller, and no separate Continue action is exposed in the production chat composer.
 
+The daemon mounts these compatibility routes only when `workflow_backend=continue` is explicitly selected. They are not available in the default Cline mode.
+
+For a reusable implementation walkthrough that compares the retained Continue callback pattern with the current Cline SDK host, see [IDE_COPILOT_INTEGRATION_GUIDE.md](IDE_COPILOT_INTEGRATION_GUIDE.md). Use this page for Continue's status and compatibility boundary.
+
 ## Retained Integration Lessons
 
 - Keep the outer Ask/ReAct controller in SOP and delegate only bounded work to a backend.

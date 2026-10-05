@@ -3,6 +3,8 @@ package sopbackend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -411,6 +413,62 @@ func TestSetupStream_MarksContentEventsAsStreamedContent(t *testing.T) {
 
 	if !hasStreamedContent() {
 		t.Fatal("expected content events to count as streamed UI output")
+	}
+}
+
+func TestSetupStreamSerializesConcurrentNDJSONEvents(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, hasStreamedContent := SetupStream(w)
+	const progressCount = 96
+	var wait sync.WaitGroup
+	for sequence := 0; sequence < progressCount; sequence++ {
+		wait.Add(1)
+		go func(sequence int) {
+			defer wait.Done()
+			sendEvent("progress", map[string]any{"sequence": sequence})
+			if sequence%2 == 0 {
+				sendEvent("content", "delegation is still running")
+			}
+		}(sequence)
+	}
+	wait.Wait()
+
+	decoder := json.NewDecoder(strings.NewReader(w.Body.String()))
+	seenProgress := make(map[int]bool, progressCount)
+	contentCount := 0
+	for {
+		var event struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := decoder.Decode(&event); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("decode streamed NDJSON event: %v", err)
+		}
+		switch event.Type {
+		case "progress":
+			var payload struct {
+				Sequence int `json:"sequence"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("decode progress payload: %v", err)
+			}
+			seenProgress[payload.Sequence] = true
+		case "content":
+			contentCount++
+		default:
+			t.Fatalf("unexpected event type %q", event.Type)
+		}
+	}
+	if len(seenProgress) != progressCount {
+		t.Fatalf("expected %d intact progress events, got %d", progressCount, len(seenProgress))
+	}
+	if contentCount != progressCount/2 {
+		t.Fatalf("expected %d content events, got %d", progressCount/2, contentCount)
+	}
+	if !hasStreamedContent() {
+		t.Fatal("expected concurrent content events to update the streamed-content state")
 	}
 }
 

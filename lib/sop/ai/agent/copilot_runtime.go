@@ -2478,7 +2478,7 @@ func (a *CopilotAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, erro
 		a.registerTools(ctx)
 	}
 
-	exposure := buildNativeToolExposure(activeRoutingState(ctx))
+	exposure := buildNativeToolExposure(activeRoutingState(ctx), a.ideWorkerOwnsCodingWorkflow())
 	tools := a.listRegisteredTools(exposure)
 	return tools, nil
 }

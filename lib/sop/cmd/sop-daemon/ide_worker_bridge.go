@@ -89,7 +89,7 @@ type compositeIDEWorkerBackend struct {
 func newConfiguredIDEWorkerBackend(service *localRAGService) ideworker.Backend {
 	workflowBackend := sopbackend.NormalizeWorkflowBackend(sopbackend.GetConfig().WorkflowBackend)
 	switch workflowBackend {
-	case "daemon":
+	case "daemon", "native":
 		if service == nil {
 			return newDaemonShellIDEWorkerBackend(nil)
 		}
@@ -98,7 +98,9 @@ func newConfiguredIDEWorkerBackend(service *localRAGService) ideworker.Backend {
 		if service == nil {
 			return newClineIDEWorkerBackend(nil)
 		}
-		return newClineIDEWorkerBackend(service.shellSessions)
+		backend := newClineIDEWorkerBackend(service.shellSessions).(*clineWorkerBackend)
+		backend.taskContexts = service.ensureClineTaskContextStore()
+		return backend
 	case "continue":
 		return newContinueIDEWorkerBackend(service)
 	default:
@@ -120,11 +122,17 @@ func newDaemonShellIDEWorkerBackend(shellSessions *ptyShellSessionManager) idewo
 	return daemonShellIDEWorkerBackend{shellSessions: shellSessions}
 }
 
+func (daemonShellIDEWorkerBackend) SupportsDelegation() bool { return false }
+
 func newContinueIDEWorkerBackend(service *localRAGService) ideworker.Backend {
 	backend := &continueIDEWorkerBackend{service: service}
 	backend.registerBackgroundSupervisorHook()
 	registerContinueDelegationBackend(backend)
 	return backend
+}
+
+func (b *continueIDEWorkerBackend) OwnsCodingWorkflow() bool {
+	return true
 }
 
 func (b compositeIDEWorkerBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {

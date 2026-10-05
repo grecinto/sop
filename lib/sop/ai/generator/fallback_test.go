@@ -12,6 +12,7 @@ import (
 type mockGenerator struct {
 	name           string
 	shouldFail     bool
+	generateError  error
 	failureCount   int
 	failsRemaining int
 	callCount      int
@@ -28,6 +29,10 @@ func (m *mockGenerator) ReActTurnStrategy() ai.ReActTurnStrategy { return nil }
 
 func (m *mockGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
 	m.callCount++
+	if m.generateError != nil {
+		m.failureCount++
+		return ai.GenOutput{}, m.generateError
+	}
 
 	if m.failsRemaining > 0 {
 		m.failsRemaining--
@@ -218,6 +223,20 @@ func TestFallbackGenerator_NonRetryableError(t *testing.T) {
 	}
 }
 
+func TestFallbackGenerator_UnknownErrorDoesNotTryFallback(t *testing.T) {
+	primary := &mockGenerator{name: "primary", generateError: errors.New("failed to build local prompt context")}
+	fallback := &mockGenerator{name: "fallback"}
+	fg := NewFallbackGenerator(primary, []ai.Generator{fallback})
+
+	_, err := fg.Generate(context.Background(), "test", ai.GenOptions{})
+	if err == nil {
+		t.Fatal("expected unknown primary error to be returned")
+	}
+	if fallback.callCount != 0 {
+		t.Fatalf("unknown errors must not trigger provider fallback, got %d calls", fallback.callCount)
+	}
+}
+
 func TestFallbackGenerator_HealthRecovery(t *testing.T) {
 	primary := &mockGenerator{name: "primary", failsRemaining: 2}
 	fallback := &mockGenerator{name: "fallback"}
@@ -273,11 +292,17 @@ func TestFallbackGenerator_IsRetryableError(t *testing.T) {
 		{errors.New("network error"), true},
 		{errors.New("500 internal server error"), true},
 		{errors.New("quota exceeded"), true},
+		{errors.New("openai api returned status code 429: too many requests"), true},
+		{errors.New("provider returned HTTP 503"), true},
 		{errors.New("401 unauthorized"), false},
 		{errors.New("400 bad request"), false},
 		{errors.New("403 forbidden"), false},
 		{errors.New("missing api key"), false},
 		{errors.New("invalid request"), false},
+		{errors.New("failed to build local prompt context"), false},
+		{errors.New("model output failed local schema validation"), false},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, true},
 	}
 
 	for _, tt := range tests {

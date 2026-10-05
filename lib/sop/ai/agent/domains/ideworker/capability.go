@@ -70,6 +70,7 @@ type TaskRequest struct {
 	TraceID        string
 	RootRequestID  string
 	SessionID      string
+	WorkstreamID   string
 	Task           string
 	Mode           string
 	Provider       string
@@ -118,6 +119,14 @@ type Backend interface {
 	CancelTask(ctx context.Context, delegationID string) (DelegationStatus, error)
 }
 
+type CodingWorkflowOwner interface {
+	OwnsCodingWorkflow() bool
+}
+
+type DelegationSupport interface {
+	SupportsDelegation() bool
+}
+
 type Capability struct {
 	backend Backend
 }
@@ -125,7 +134,21 @@ type Capability struct {
 func NewCapability() *Capability { return &Capability{} }
 
 func (c *Capability) HasBackend() bool {
-	return c != nil && c.backend != nil
+	if c == nil || c.backend == nil {
+		return false
+	}
+	if support, ok := c.backend.(DelegationSupport); ok {
+		return support.SupportsDelegation()
+	}
+	return true
+}
+
+func (c *Capability) OwnsCodingWorkflow() bool {
+	if !c.HasBackend() {
+		return false
+	}
+	owner, ok := c.backend.(CodingWorkflowOwner)
+	return ok && owner.OwnsCodingWorkflow()
 }
 
 func (c *Capability) SetBackend(backend Backend) {
@@ -200,14 +223,16 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	metadata := parseContinuePromptMetadata(query)
 	_ = state
 	b := strings.Builder{}
-	b.WriteString("Structured Context: Continue Delegation\n")
-	b.WriteString("- Continue-originated requests are still normal Ask turns. Bridge metadata provides delegation constraints and context, but it never transfers workflow control away from the daemon Ask pipeline.\n")
-	b.WriteString("- When a Continue-backed IDE worker is available for this session, Ask may delegate one bounded IDE coding subtask to Continue's own Ask/tool loop without giving up daemon control.\n")
-	b.WriteString("- This capability is LAO-oriented: the daemon LLM classifies and orchestrates the broader request, and Continue performs only the delegated coding slice for that step.\n")
-	b.WriteString("- Ask-visible tool: delegate_continue_task. Use other daemon capabilities normally before or after delegation when the request needs broader workflow support.\n")
-	b.WriteString("- Delegation discipline: delegate one bounded objective, consume the returned result, then resume Ask-side orchestration for the next decision.\n")
-	b.WriteString("- Expected Continue result: a final structured execution report covering modified_files, CRUD operation per file, diff deltas or artifact references, and execution metadata.\n")
+	b.WriteString("Structured Context: IDE Worker Delegation\n")
+	b.WriteString("- IDE worker requests are normal Ask turns. Bridge metadata provides delegation constraints and context, but it never transfers workflow control away from SOP Ask.\n")
+	b.WriteString("- Ask may delegate one bounded coding task to the configured IDE backend while retaining ownership of the larger workflow.\n")
+	b.WriteString("- Ask-visible tool: delegate_continue_task (legacy name). Use other daemon capabilities for separate non-coding domains when appropriate.\n")
+	b.WriteString("- Delegation discipline: delegate one bounded objective, consume the completed result or follow the returned running handle with status/cancel tools, then resume Ask-side orchestration.\n")
+	b.WriteString("- Expected worker result: a final structured execution report covering modified_files, CRUD operation per file, diff deltas or artifact references, and execution metadata.\n")
 	b.WriteString("- Rich delegation parameters are supported: team practices, success criteria, constraints, implementation notes, expected result format, and reference context can be passed as structured guidance.\n")
+	if c != nil && c.OwnsCodingWorkflow() {
+		b.WriteString("- The configured backend owns repository coding execution for this turn. Delegate the coding task once, wait for its completed result, and do not split implementation across native coding phase tools.\n")
+	}
 	if metadata.HasBridgeContext {
 		if metadata.Mode != "" {
 			b.WriteString(fmt.Sprintf("- continue_mode: %s\n", metadata.Mode))
@@ -235,7 +260,7 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
 	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide bounded IDE delegation and preserve Ask-side orchestration")
 	base.Principles = []string{"Keep Ask as the controller for the larger workflow", "Preserve structured success criteria and constraints for the delegated turn"}
-	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not hand off the entire workflow to Continue when the daemon still needs to orchestrate the next step"}}
+	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not hand off the entire workflow when Ask still needs to orchestrate distinct follow-up tasks"}}
 	base.ToolSelection = []capabilities.GuidanceRule{{Description: "Prefer delegation when the task is editor-native and bounded, otherwise use the daemon-native capability path"}}
 
 	profile := capabilities.GuidanceProfile{
@@ -249,7 +274,7 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{
 		{
 			Name:        delegateContinueToolName,
-			Description: "Delegate one bounded coding subtask to the connected Continue worker so Continue can run its own Ask/tool loop locally and return the finished result to AI Studio.",
+			Description: "Delegate one bounded coding task to the configured IDE backend and return its structured result or running task handle to SOP Ask.",
 			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"target_file":{"type":"string","description":"Specific file target for edit-style delegation"},"target_symbol":{"type":"string","description":"Symbol or function name to focus the edit on"},"surrounding_snippet":{"type":"string","description":"Snippet around the edit target to provide context to the IDE worker"},"change_intent":{"type":"string","description":"Intent or expected outcome for the requested edit"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
 			Tags:        []string{"R", "U"},
 		},
@@ -259,17 +284,19 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	metadata := parseContinuePromptMetadata(query)
 	_ = state
-	instructions := `Continue Delegation Guidance:
-- This capability exposes one Ask-visible delegation tool: delegate_continue_task.
-- Continue-originated requests remain normal Ask turns. Treat Continue bridge metadata as delegation constraints, never as a workflow handoff.
+	instructions := `IDE Worker Delegation Guidance:
+- This capability exposes one Ask-visible delegation tool: delegate_continue_task (legacy name).
+- IDE-originated requests remain normal Ask turns. Treat bridge metadata as delegation constraints, never as a workflow handoff.
 - Before any edit, state the immediate objective and expected scope in one sentence. Prefer the smallest valid change over a broad rewrite.
-- Use delegate_continue_task only for one bounded coding subtask that Continue should complete through its own local Ask/tool loop.
-- Keep Ask as the controller. Classify and orchestrate the larger workflow in the daemon, delegate the IDE coding slice to Continue, consume the result, then continue with the remaining work.
-- Continue is the coding executor for the delegated slice, not the outer workflow controller.
-- Do not choreograph Continue with low-level tool sequences or delegation lifecycle loops. Delegate one objective, let Continue execute it, then continue orchestration in Ask.
-- Expect Continue to finish with a structured execution result that lists modified_files, CRUD operations, diff deltas or diff artifact references, and relevant metadata.
-- When available, pass structured guidance such as team practices from LTM, success criteria, constraints, implementation notes, expected result format, and reference context as parameters to Continue's Ask.
-- If Continue is not available or the request does not benefit from editor-native coding execution, continue with daemon-native tools or other capabilities instead.`
+- Use delegate_continue_task for one bounded coding task when the configured IDE backend owns that execution path.
+- Keep Ask as the controller. Delegate one objective, consume its completed result or follow its running handle with status/cancel tools, then continue Ask-side orchestration for distinct follow-up work.
+- The backend executes the delegated slice; it never becomes the outer workflow controller.
+- Expect a structured execution result listing modified_files, CRUD operations, diff deltas or artifact references, and relevant metadata.
+- Pass structured guidance such as team practices from LTM, success criteria, constraints, implementation notes, expected result format, and reference context.
+- If no coding backend is available, Ask should use the native coding workflow instead of exposing a broken delegation path.`
+	if c != nil && c.OwnsCodingWorkflow() {
+		instructions += "\n- The configured backend completes coding tasks synchronously; use its returned result instead of polling delegation status or calling native coding phase tools."
+	}
 	if !metadata.HasBridgeContext {
 		return instructions
 	}
@@ -375,6 +402,7 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	if payload != nil {
 		req.SessionID = strings.TrimSpace(payload.SessionID)
 		if payload.Variables != nil {
+			req.WorkstreamID = readString(payload.Variables, "sop_workstream_id")
 			req.RequestID = readString(payload.Variables, ai.ParticipantRequestIDVariableKey)
 			req.TraceID = readString(payload.Variables, ai.ParticipantTraceIDVariableKey)
 			if req.TraceID == "" {
@@ -395,6 +423,23 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 			req.OpenFiles = readStringSlice(payload.Variables["open_files"])
 			req.Guidance = readDelegationGuidanceFromVariables(payload.Variables)
 		}
+	}
+	if req.Provider == "" {
+		if providerModel, ok := ctx.Value(ai.CtxKeyProvider).(string); ok {
+			req.Provider, req.Model = splitProviderModel(providerModel, req.Model)
+		}
+	}
+	if req.APIKey == "" {
+		req.APIKey, _ = ctx.Value(ai.CtxKeyAPIKey).(string)
+	}
+	if req.BaseURL == "" {
+		req.BaseURL, _ = ctx.Value(ai.CtxKeyBaseURL).(string)
+	}
+	if req.MCPURL == "" {
+		req.MCPURL, _ = ctx.Value(ai.CtxKeyMCPURL).(string)
+	}
+	if req.MCPBearerToken == "" {
+		req.MCPBearerToken, _ = ctx.Value(ai.CtxKeyMCPBearerToken).(string)
 	}
 
 	if task, ok := args["task"].(string); ok {
@@ -497,12 +542,27 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	if req.SessionID == "" {
 		return "", fmt.Errorf("session id is required to delegate an IDE worker task")
 	}
+	if owner, ok := c.backend.(CodingWorkflowOwner); ok && owner.OwnsCodingWorkflow() {
+		return c.backend.ExecuteTask(ctx, req)
+	}
 
 	handle, err := c.backend.StartTask(ctx, req)
 	if err != nil {
 		return "", err
 	}
 	return formatDelegationHandle(handle), nil
+}
+
+func splitProviderModel(providerModel, fallbackModel string) (string, string) {
+	providerModel = strings.TrimSpace(providerModel)
+	provider, model, found := strings.Cut(providerModel, ":")
+	if !found {
+		return providerModel, fallbackModel
+	}
+	if strings.TrimSpace(model) == "" {
+		model = fallbackModel
+	}
+	return strings.TrimSpace(provider), strings.TrimSpace(model)
 }
 
 func (c *Capability) getDelegationStatus(ctx context.Context, args map[string]any) (string, error) {

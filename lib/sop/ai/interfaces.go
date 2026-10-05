@@ -50,6 +50,10 @@ const (
 	CtxKeyProgressSink ContextKey = "ai_progress_sink"
 	// CtxKeyEventStreamer is the context key for passing a structured event emitter callback.
 	CtxKeyEventStreamer ContextKey = "ai_event_streamer"
+	// CtxKeyMCPURL carries the request-scoped SOP MCP endpoint for delegated agents.
+	CtxKeyMCPURL ContextKey = "ai_mcp_url"
+	// CtxKeyMCPBearerToken carries request-scoped auth for delegated SOP MCP calls.
+	CtxKeyMCPBearerToken ContextKey = "ai_mcp_bearer_token"
 	// CtxKeyNativeToolHints marks native Ask-loop tool execution that can consume structured progress hints.
 	CtxKeyNativeToolHints ContextKey = "ai_native_tool_hints"
 	// CtxKeyIsNewTopic carries the is-new-topic signal from the orchestrating Service down to pipeline agents.

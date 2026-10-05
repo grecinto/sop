@@ -38,6 +38,7 @@ const sidebars: SidebarsConfig = {
         'sdk/intro',
         'sdk/history',
         'sdk/ide-copilot-backend',
+        'sdk/coding-agent-integrations',
         'sdk/ask-participant-mode',
         'sdk/workflow-architecture',
         'sdk/vector-database',

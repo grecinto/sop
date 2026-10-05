@@ -20,6 +20,8 @@ type fakeBackend struct {
 	delegationErr    error
 	lastDelegationID string
 	cancelled        bool
+	executeCalls     int
+	startCalls       int
 }
 
 func (f *fakeBackend) InspectSession(ctx context.Context, sessionID string) (SessionState, error) {
@@ -32,12 +34,14 @@ func (f *fakeBackend) InspectSession(ctx context.Context, sessionID string) (Ses
 
 func (f *fakeBackend) ExecuteTask(ctx context.Context, req TaskRequest) (string, error) {
 	_ = ctx
+	f.executeCalls++
 	f.lastRequest = req
 	return f.result, f.err
 }
 
 func (f *fakeBackend) StartTask(ctx context.Context, req TaskRequest) (DelegationHandle, error) {
 	_ = ctx
+	f.startCalls++
 	f.lastRequest = req
 	if f.delegationErr != nil {
 		return DelegationHandle{}, f.delegationErr
@@ -48,6 +52,12 @@ func (f *fakeBackend) StartTask(ctx context.Context, req TaskRequest) (Delegatio
 	f.lastDelegationID = f.delegationID
 	return DelegationHandle{ID: f.delegationID}, nil
 }
+
+type synchronousCodingBackend struct {
+	*fakeBackend
+}
+
+func (synchronousCodingBackend) OwnsCodingWorkflow() bool { return true }
 
 func (f *fakeBackend) GetTaskStatus(ctx context.Context, delegationID string) (DelegationStatus, error) {
 	_ = ctx
@@ -183,6 +193,7 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 		CurrentUserQuery: "Apply the prepared patch",
 		Variables: map[string]any{
 			"continue_mode":                   "apply",
+			"sop_workstream_id":               "workstream-2",
 			"llm_provider":                    "anthropic",
 			"llm_model":                       "claude-sonnet-4-5",
 			"requested_phase":                 "execution",
@@ -224,6 +235,9 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	if backend.lastRequest.SessionID != "sess-2" {
 		t.Fatalf("expected session id sess-2, got %q", backend.lastRequest.SessionID)
 	}
+	if backend.lastRequest.WorkstreamID != "workstream-2" {
+		t.Fatalf("expected workstream id to propagate, got %q", backend.lastRequest.WorkstreamID)
+	}
 	if backend.lastRequest.Mode != "apply" || backend.lastRequest.ActiveFile != "payments/service.go" || backend.lastRequest.WorkspaceRoot != "/repo" {
 		t.Fatalf("unexpected delegated request: %#v", backend.lastRequest)
 	}
@@ -253,6 +267,50 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	}
 	if len(backend.lastRequest.Guidance.ReferenceContext) != 1 || backend.lastRequest.Guidance.ReferenceContext[0].Source != "Team Patterns/Payments" {
 		t.Fatalf("expected reference context guidance to propagate, got %#v", backend.lastRequest.Guidance.ReferenceContext)
+	}
+}
+
+func TestCapabilityUsesSynchronousResultForCodingWorkflowOwner(t *testing.T) {
+	backend := &fakeBackend{result: `{"status":"completed","summary":"Cline finished the coding task"}`}
+	capability := NewCapability()
+	capability.SetBackend(synchronousCodingBackend{fakeBackend: backend})
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		SessionID: "session-cline",
+		Variables: map[string]any{"sop_workstream_id": "workstream-cline"},
+	})
+
+	result, err := capability.ExecuteTool(ctx, "delegate_continue_task", map[string]any{"task": "fix the parser"}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("delegate coding task: %v", err)
+	}
+	if backend.executeCalls != 1 || backend.startCalls != 0 {
+		t.Fatalf("coding workflow owner should complete synchronously, execute=%d start=%d", backend.executeCalls, backend.startCalls)
+	}
+	if !strings.Contains(result, "Cline finished the coding task") {
+		t.Fatalf("expected final coding result returned to Ask, got %q", result)
+	}
+}
+
+func TestCapabilityPropagatesRequestScopedProviderAndMCPContext(t *testing.T) {
+	backend := &fakeBackend{result: "delegated"}
+	capability := NewCapability()
+	capability.SetBackend(backend)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{SessionID: "session-context"})
+	ctx = context.WithValue(ctx, ai.CtxKeyProvider, "anthropic:claude-sonnet-4-5")
+	ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, "provider-secret")
+	ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, "https://provider.invalid/v1")
+	ctx = context.WithValue(ctx, ai.CtxKeyMCPURL, "http://127.0.0.1:9090/mcp")
+	ctx = context.WithValue(ctx, ai.CtxKeyMCPBearerToken, "daemon-bearer")
+
+	if _, err := capability.ExecuteTool(ctx, "delegate_continue_task", map[string]any{"task": "fix the parser"}, capabilities.RoutingState{}); err != nil {
+		t.Fatalf("delegate coding task: %v", err)
+	}
+	request := backend.lastRequest
+	if request.Provider != "anthropic" || request.Model != "claude-sonnet-4-5" || request.APIKey != "provider-secret" || request.BaseURL != "https://provider.invalid/v1" {
+		t.Fatalf("provider configuration was not propagated: %#v", request)
+	}
+	if request.MCPURL != "http://127.0.0.1:9090/mcp" || request.MCPBearerToken != "daemon-bearer" {
+		t.Fatalf("MCP transport context was not propagated: %#v", request)
 	}
 }
 

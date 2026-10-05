@@ -114,3 +114,27 @@ func TestClineHTTPTaskLifecycle(t *testing.T) {
 		t.Fatalf("unexpected cancel response: %d %s", cancelRecorder.Code, cancelRecorder.Body.String())
 	}
 }
+
+func TestClineMCPContextDoesNotTrustArbitraryHostHeader(t *testing.T) {
+	t.Setenv("SOP_AI_STUDIO_MCP_URL", "")
+	t.Setenv("SOP_AI_STUDIO_MCP_TOKEN", "")
+	request := httptest.NewRequest(http.MethodPost, "http://attacker.invalid/api/ask", nil)
+	request.Header.Set("Authorization", "Bearer daemon-token")
+	url, token := clineMCPContext(request)
+	if url != "http://127.0.0.1:9090/mcp" {
+		t.Fatalf("unexpected MCP URL from untrusted Host header: %q", url)
+	}
+	if token != "daemon-token" {
+		t.Fatalf("expected request bearer token, got %q", token)
+	}
+}
+
+func TestClineMCPContextUsesConfiguredEndpointAndToken(t *testing.T) {
+	t.Setenv("SOP_AI_STUDIO_MCP_URL", "https://sop.internal/mcp")
+	t.Setenv("SOP_AI_STUDIO_MCP_TOKEN", "configured-token")
+	request := httptest.NewRequest(http.MethodPost, "http://localhost:9090/api/ask", nil)
+	url, token := clineMCPContext(request)
+	if url != "https://sop.internal/mcp" || token != "configured-token" {
+		t.Fatalf("unexpected configured MCP context: url=%q token=%q", url, token)
+	}
+}

@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
@@ -51,12 +54,46 @@ func populateClineMCPContext(r *http.Request, taskRequest *ideworker.TaskRequest
 	if r == nil || taskRequest == nil {
 		return
 	}
+	taskRequest.MCPURL, taskRequest.MCPBearerToken = clineMCPContext(r)
+}
+
+func clineMCPContext(r *http.Request) (string, string) {
+	if r == nil {
+		return "", ""
+	}
+	if configured := strings.TrimSpace(os.Getenv("SOP_AI_STUDIO_MCP_URL")); configured != "" {
+		if parsed, err := url.ParseRequestURI(configured); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
+			return configured, clineMCPBearerToken(r)
+		}
+	}
 	host := strings.TrimSpace(r.Host)
-	if host == "" {
+	if !isLoopbackHTTPHost(host) {
 		host = "127.0.0.1:9090"
 	}
-	taskRequest.MCPURL = "http://" + host + "/mcp"
-	taskRequest.MCPBearerToken = extractBearerToken(r.Header.Get("Authorization"))
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + host + "/mcp", clineMCPBearerToken(r)
+}
+
+func isLoopbackHTTPHost(host string) bool {
+	hostname := host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		hostname = parsedHost
+	}
+	if strings.EqualFold(strings.TrimSpace(hostname), "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(hostname, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+func clineMCPBearerToken(r *http.Request) string {
+	if token := extractBearerToken(r.Header.Get("Authorization")); token != "" {
+		return token
+	}
+	return strings.TrimSpace(os.Getenv("SOP_AI_STUDIO_MCP_TOKEN"))
 }
 
 func (s *localRAGService) handleClineExecute(w http.ResponseWriter, r *http.Request) {

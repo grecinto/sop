@@ -493,6 +493,9 @@ func normalizeCredentialForComparison(cred llmCredential) llmCredential {
 }
 
 func recordLLMProviderOutcome(pool map[string]llmCredential, provider string, success bool, nowMS int64) map[string]llmCredential {
+	// Outcome counters are diagnostic telemetry, not credential configuration
+	// updates. In particular, do not advance UpdatedAtMS here: candidate ordering
+	// uses that timestamp for explicit pool/config recency.
 	if len(pool) == 0 && strings.TrimSpace(provider) == "" {
 		return nil
 	}
@@ -511,7 +514,6 @@ func recordLLMProviderOutcome(pool map[string]llmCredential, provider string, su
 	if nowMS <= 0 {
 		nowMS = time.Now().UTC().UnixMilli()
 	}
-	cred.UpdatedAtMS = normalizePoolTimestamp(nowMS)
 	cred.LastValidatedAtMS = normalizePoolTimestamp(nowMS)
 	if success {
 		cred.SuccessCount++
@@ -1375,6 +1377,11 @@ func main() {
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if ragSvc != nil {
+			if err := ragSvc.Close(); err != nil {
+				log.Printf("Cline SDK host cleanup failed: %v", err)
+			}
 		}
 	}()
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

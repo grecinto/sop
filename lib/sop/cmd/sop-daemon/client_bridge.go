@@ -839,7 +839,7 @@ func registerBridgeRoute(mux *http.ServeMux, pattern string, handler http.Handle
 }
 
 func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionRegistry, authHandler *DaemonAuthHandler) {
-	if mux == nil || reg == nil {
+	if mux == nil || reg == nil || sopbackend.NormalizeWorkflowBackend(sopbackend.GetConfig().WorkflowBackend) != "continue" {
 		return
 	}
 	for _, client := range s.bridgeClients() {

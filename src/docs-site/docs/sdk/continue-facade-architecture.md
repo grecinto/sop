@@ -2,7 +2,7 @@
 
 **Status:** Historical compatibility page. Continue is not the shipping copilot backend. The standard AI Studio chat flow uses SOP Ask as the outer controller and delegates bounded coding tasks to the configured daemon backend; Cline SDK is the current default.
 
-For the current backend architecture, start with [IDE Copilot Backends](./ide-copilot-backend.md).
+For the current backend architecture, start with [IDE Copilot Backends](./ide-copilot-backend.md). For a reusable integration walkthrough comparing the current Cline host with the retained Continue callback pattern, see [Integrating a Coding Agent](./coding-agent-integrations.md).
 
 The old Continue facade remains in the repository as a compatibility implementation. Its `/api/continue/*` routes and editor-client design should not be treated as the production setup path or as a promise that Continue is installed with SOP Cloud.
 

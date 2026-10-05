@@ -1711,6 +1711,7 @@ func isReducerSamplePayload(s string) bool {
 // This is used by both HQ (/api/ai/chat) and daemon (/api/ask).
 func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 	var contentStreamed bool
+	var streamMu sync.Mutex
 
 	// Set streaming headers immediately to prevent buffering
 	w.Header().Set("Content-Type", "application/x-ndjson")
@@ -1756,6 +1757,9 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 	}
 
 	sendEvent := func(eventType string, payload any) {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+
 		switch eventType {
 		case "session_id":
 			// Filter out session_id from client stream - it's for internal logging only
@@ -1930,7 +1934,11 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 		// writeEvent(eventType, payload)
 	}
 
-	return sendEvent, func() bool { return contentStreamed }
+	return sendEvent, func() bool {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		return contentStreamed
+	}
 }
 
 func resolveContextAndAgent(ctx context.Context, req *aiChatRequest, sendEvent func(string, any)) (ai.Agent[map[string]any], error) {

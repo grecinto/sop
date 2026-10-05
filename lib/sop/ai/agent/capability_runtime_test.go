@@ -16,6 +16,12 @@ import (
 
 type runtimeIDEWorkerBackendStub struct{}
 
+type runtimeCodingWorkflowBackendStub struct {
+	runtimeIDEWorkerBackendStub
+}
+
+func (runtimeCodingWorkflowBackendStub) OwnsCodingWorkflow() bool { return true }
+
 func (runtimeIDEWorkerBackendStub) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	_ = ctx
 	return ideworker.SessionState{SessionID: sessionID, Connected: true, IDE: "continue"}, nil
@@ -259,6 +265,37 @@ func TestRegisterTools_RegistersDelegateContinueTaskWhenBackendInjected(t *testi
 
 	if !found["delegate_continue_task"] {
 		t.Fatalf("expected delegate_continue_task when an IDE worker backend is injected")
+	}
+}
+
+func TestRegisterCapabilityToolsKeepsCodingDelegationWhenClineOwnsExecution(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.InjectIDEWorkerBackend(runtimeCodingWorkflowBackendStub{})
+	payload := &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}}
+	payload.Variables["RoutingState"] = &TaskContextClassification{
+		Domain:      "coding_workflow",
+		RoutingGate: RoutingGateDiscovery,
+		AskClassification: &AskTaskContext{
+			Domains: []string{"coding_workflow"},
+			Phase:   "execution",
+			CRUD:    []string{"R", "U"},
+		},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	ag.registerCapabilityTools(ctx)
+	registered := map[string]bool{}
+	for _, tool := range ag.registry.List() {
+		registered[tool.Name] = true
+	}
+	if !registered["delegate_continue_task"] {
+		t.Fatal("expected IDE worker delegation tool in the Cline-owned coding turn")
+	}
+	if registered["execution_apply_patch"] || registered["investigation_inspect_repo"] {
+		t.Fatalf("expected native coding phase tools to remain deferred, got %#v", registered)
 	}
 }
 

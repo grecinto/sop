@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 )
 
 func TestMCPServerListsGuidanceTool(t *testing.T) {
@@ -57,6 +59,33 @@ func TestMCPServerReturnsScopedTaskGuidance(t *testing.T) {
 	}
 }
 
+func TestMCPServerReturnsClineWorkstreamGuidanceWithoutContinueSnapshot(t *testing.T) {
+	service := &localRAGService{clineTaskContexts: &clineTaskContextStore{contexts: make(map[string]clineTaskContext)}}
+	service.ensureClineTaskContextStore().PutFromRequest(ideworker.TaskRequest{
+		RequestID:      "request-cline-1",
+		SessionID:      "sop-session-1",
+		WorkstreamID:   "workstream-cline-1",
+		Task:           "Fix the parser tests",
+		WorkspaceRoot:  "/tmp/workspace-cline",
+		ActiveFile:     "parser.go",
+		OpenFiles:      []string{"parser.go", "parser_test.go"},
+		RequestedPhase: "execution",
+	}, "in_progress", "Fix the parser tests")
+
+	result, err := mcpTaskGuidance(service, map[string]any{
+		"session_id":    "sop-session-1",
+		"workstream_id": "workstream-cline-1",
+	})
+	if err != nil {
+		t.Fatalf("mcpTaskGuidance for Cline workstream failed: %v", err)
+	}
+	for _, want := range []string{"Fix the parser tests", "parser.go", "workstream-cline-1", "execution"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected Cline task guidance to contain %q, got %s", want, result)
+		}
+	}
+}
+
 func TestMCPServerRecordsValidationInSessionContext(t *testing.T) {
 	service := &localRAGService{continueState: newContinueBridgeSessionStore()}
 	service.ensureContinueSessionStore().Put(continueSessionSnapshot{SessionID: "session-1"})
@@ -75,6 +104,42 @@ func TestMCPServerRecordsValidationInSessionContext(t *testing.T) {
 	snapshot, ok := service.ensureContinueSessionStore().Get("session-1")
 	if !ok || snapshot.Validation["status"] != "passed" {
 		t.Fatalf("validation was not stored: %#v", snapshot)
+	}
+}
+
+func TestMCPServerRecordsValidationInClineWorkstream(t *testing.T) {
+	service := &localRAGService{clineTaskContexts: &clineTaskContextStore{contexts: make(map[string]clineTaskContext)}}
+	service.ensureClineTaskContextStore().PutFromRequest(ideworker.TaskRequest{
+		RequestID: "request-cline-validation", SessionID: "sop-session-validation", WorkstreamID: "workstream-validation", Task: "run tests",
+	}, "in_progress", "run tests")
+	_, err := mcpRecordValidation(service, map[string]any{
+		"session_id": "sop-session-validation", "workstream_id": "workstream-validation",
+		"status": "passed", "summary": "go test passed", "command": "go test ./...",
+	})
+	if err != nil {
+		t.Fatalf("record Cline validation: %v", err)
+	}
+	taskContext, ok := service.ensureClineTaskContextStore().Get("workstream-validation", "sop-session-validation")
+	if !ok || taskContext.Validation["status"] != "passed" || taskContext.Validation["command"] != "go test ./..." {
+		t.Fatalf("Cline validation missing from workstream context: %#v", taskContext)
+	}
+	if _, ok := service.ensureContinueSessionStore().Get("sop-session-validation"); ok {
+		t.Fatal("Cline validation must not create or depend on a Continue session snapshot")
+	}
+}
+
+func TestMCPRestoreRejectsMismatchedClineWorkstreamSession(t *testing.T) {
+	workspace := t.TempDir()
+	service := &localRAGService{clineTaskContexts: &clineTaskContextStore{contexts: make(map[string]clineTaskContext)}}
+	service.ensureClineTaskContextStore().PutFromRequest(ideworker.TaskRequest{
+		SessionID: "sop-session-authorized", WorkstreamID: "workstream-authorized", WorkspaceRoot: workspace,
+	}, "in_progress", "task")
+	_, err := mcpRestoreUndoTransaction(context.Background(), service, map[string]any{
+		"workspace_root": workspace, "session_id": "sop-session-other", "workstream_id": "workstream-authorized",
+		"transaction_id": "txn-1", "confirm": true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected mismatched SOP session to fail authorization, got %v", err)
 	}
 }
 

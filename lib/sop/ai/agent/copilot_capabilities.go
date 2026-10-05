@@ -1010,3 +1010,15 @@ func (a *CopilotAgent) InjectIDEWorkerBackend(backend ideworker.Backend) {
 		}
 	}
 }
+
+func (a *CopilotAgent) ideWorkerOwnsCodingWorkflow() bool {
+	if a == nil || a.capabilityRegistry == nil {
+		return false
+	}
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if ideCap, ok := cap.(*ideworker.Capability); ok {
+			return ideCap.OwnsCodingWorkflow()
+		}
+	}
+	return false
+}

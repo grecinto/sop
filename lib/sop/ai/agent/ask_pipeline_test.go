@@ -377,6 +377,36 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsExecutionPhase(t *testing.T) {
 	}
 }
 
+func TestCreatePhaseProxiesUsesConfiguredCodingWorkflowOwner(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.InjectIDEWorkerBackend(runtimeCodingWorkflowBackendStub{})
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution"}
+	phases := ag.createPhaseProxies([]string{"coding_workflow"}, "execution", classification)
+	if len(phases) != 0 {
+		t.Fatalf("Cline owns coding execution, expected no native coding phase proxies, got %d", len(phases))
+	}
+
+	classification.Domains = []string{"coding_workflow", "stores"}
+	phases = ag.createPhaseProxies([]string{"coding_workflow", "stores"}, "execution", classification)
+	if len(phases) == 0 {
+		t.Fatal("expected the unrelated Stores phase to remain available")
+	}
+	for _, phase := range phases {
+		if strings.HasPrefix(phase.ID(), "phase_coding_workflow") {
+			t.Fatalf("native coding phase should be excluded when Cline owns execution: %s", phase.ID())
+		}
+	}
+
+	nativeAgent := NewCopilotAgent(Config{}, nil, nil)
+	nativePhases := nativeAgent.createPhaseProxies([]string{"coding_workflow"}, "execution", &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution"})
+	if len(nativePhases) == 0 {
+		t.Fatal("native coding phases should remain available when no backend claims coding execution")
+	}
+}
+
 func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.T) {
 	agent := &CopilotAgent{}
 	classification := &AskTaskContext{

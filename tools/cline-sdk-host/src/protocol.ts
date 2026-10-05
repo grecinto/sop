@@ -4,6 +4,8 @@ export type RunRequest = {
   type: "run";
   requestId: string;
   sessionId?: string;
+  workstreamId?: string;
+  clineSessionId: string;
   task: string;
   workspaceRoot: string;
   providerId: string;
@@ -35,7 +37,7 @@ export type ShutdownRequest = {
 };
 
 export type HostEvent = {
-  type: "started" | "progress" | "result" | "error" | "cancelled" | "stopped";
+  type: "started" | "progress" | "result" | "error" | "cancelled" | "session_invalidated" | "stopped";
   requestId?: string;
   sessionId?: string;
   message?: string;

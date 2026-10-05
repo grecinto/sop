@@ -107,7 +107,7 @@ func activeRoutingState(ctx context.Context) *TaskContextClassification {
 	return nil
 }
 
-func buildNativeToolExposure(routingState *TaskContextClassification) nativeToolExposure {
+func buildNativeToolExposure(routingState *TaskContextClassification, codingDelegated ...bool) nativeToolExposure {
 	if routingState == nil {
 		return nativeToolExposure{}
 	}
@@ -240,6 +240,15 @@ func buildNativeToolExposure(routingState *TaskContextClassification) nativeTool
 		allowed["list_directory"] = true
 		allowed["read_file"] = true
 		allowed["write_file"] = true
+	}
+
+	if len(codingDelegated) > 0 && codingDelegated[0] && routingState.AskClassification != nil && askClassificationHasDomain(routingState.AskClassification.Domains, "coding_workflow") {
+		for name := range gitToolNames {
+			delete(allowed, name)
+		}
+		for name := range commandLineToolNames {
+			delete(allowed, name)
+		}
 	}
 
 	log.Info("Tool exposure built",

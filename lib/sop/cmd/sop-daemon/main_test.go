@@ -1043,7 +1043,15 @@ func TestContinueToolHandlerFallsBackToLocalMultiEditWhenTargetFileIsNotOpen(t *
 	}
 }
 
+func useContinueWorkflowBackend(t *testing.T) {
+	t.Helper()
+	oldConfig := sopbackend.GetConfig()
+	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
+	t.Cleanup(func() { sopbackend.SetConfig(oldConfig) })
+}
+
 func TestRegisterBridgeRoutes_MountsClientEndpoints(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -1080,6 +1088,7 @@ func TestRegisterBridgeRoutes_MountsClientEndpoints(t *testing.T) {
 }
 
 func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -1250,6 +1259,7 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 }
 
 func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -1299,6 +1309,7 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 }
 
 func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -1940,6 +1951,10 @@ func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
 		if _, ok := backend.(*clineWorkerBackend); !ok {
 			t.Fatalf("expected cline workflow backend, got %T", backend)
 		}
+		owner, ok := backend.(ideworker.CodingWorkflowOwner)
+		if !ok || !owner.OwnsCodingWorkflow() {
+			t.Fatal("expected selected Cline backend to own coding execution")
+		}
 	})
 
 	t.Run("continue reference override", func(t *testing.T) {
@@ -1947,6 +1962,10 @@ func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
 		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
 		if _, ok := backend.(*continueIDEWorkerBackend); !ok {
 			t.Fatalf("expected continue reference backend, got %T", backend)
+		}
+		owner, ok := backend.(ideworker.CodingWorkflowOwner)
+		if !ok || !owner.OwnsCodingWorkflow() {
+			t.Fatal("expected explicitly selected Continue backend to own coding execution")
 		}
 	})
 
@@ -1957,6 +1976,59 @@ func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
 			t.Fatalf("expected daemon workflow backend, got %T", backend)
 		}
 	})
+
+	t.Run("native coding workflow override", func(t *testing.T) {
+		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "native"})
+		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		if _, ok := backend.(daemonShellIDEWorkerBackend); !ok {
+			t.Fatalf("expected native workflow to use the daemon shell context backend, got %T", backend)
+		}
+		if owner, ok := backend.(ideworker.CodingWorkflowOwner); ok && owner.OwnsCodingWorkflow() {
+			t.Fatal("native mode must leave coding execution to SOP's in-house phases")
+		}
+		if support, ok := backend.(ideworker.DelegationSupport); !ok || support.SupportsDelegation() {
+			t.Fatal("native mode must not expose the daemon shell as an IDE delegation backend")
+		}
+		if sopbackend.NormalizeWorkflowBackend("in-house") != "native" {
+			t.Fatal("expected in-house alias to normalize to native coding workflow")
+		}
+	})
+
+	t.Run("continue explicitly owns coding workflow", func(t *testing.T) {
+		sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
+		backend := newConfiguredIDEWorkerBackend(&localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()})
+		owner, ok := backend.(ideworker.CodingWorkflowOwner)
+		if !ok || !owner.OwnsCodingWorkflow() {
+			t.Fatalf("expected selected Continue backend to own coding workflow, got %T", backend)
+		}
+	})
+}
+
+func TestContinueBridgeRoutesOnlyRegisterForContinueWorkflowBackend(t *testing.T) {
+	oldCfg := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldCfg)
+	service := &localRAGService{service: &recordingQueryAgent{}, continueState: newContinueBridgeSessionStore(), continueWorkers: newContinueBridgeWorkerStore()}
+	registry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 10, Window: time.Minute})
+
+	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "cline"})
+	clineMux := http.NewServeMux()
+	service.registerBridgeRoutes(clineMux, registry, nil)
+	clineRequest := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
+	clineRecorder := httptest.NewRecorder()
+	clineMux.ServeHTTP(clineRecorder, clineRequest)
+	if clineRecorder.Code != http.StatusNotFound {
+		t.Fatalf("Continue bridge must be unmounted in Cline mode, got %d: %s", clineRecorder.Code, clineRecorder.Body.String())
+	}
+
+	sopbackend.SetConfig(sopbackend.Config{WorkflowBackend: "continue"})
+	continueMux := http.NewServeMux()
+	service.registerBridgeRoutes(continueMux, registry, nil)
+	continueRequest := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
+	continueRecorder := httptest.NewRecorder()
+	continueMux.ServeHTTP(continueRecorder, continueRequest)
+	if continueRecorder.Code == http.StatusNotFound {
+		t.Fatal("Continue bridge should register when Continue is explicitly selected")
+	}
 }
 
 func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *testing.T) {
@@ -2052,6 +2124,7 @@ func TestDefaultIDEWorkerBackend_InspectSessionFallsBackToDaemonShell(t *testing
 }
 
 func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabilities(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -2129,6 +2202,7 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 }
 
 func TestRegisterBridgeRoutes_RejectsWorkerRegistrationWithNonLoopbackCallbackURL(t *testing.T) {
+	useContinueWorkflowBackend(t)
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
@@ -2148,14 +2222,14 @@ func TestRegisterBridgeRoutes_RejectsWorkerRegistrationWithNonLoopbackCallbackUR
 }
 
 func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testing.T) {
-	withIsolatedSystemDB(t)
+	useContinueWorkflowBackend(t)
 	xdgConfigHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
 	authHandler := &DaemonAuthHandler{
 		bootstrapSecret: "stale-secret",
 		bootstrapPath:   filepath.Join(xdgConfigHome, "sop", "daemon.bootstrap.bridge-client"),
-		sessionStore:    sopbackend.NewSessionStore(time.Minute),
+		sessionStore:    newInMemoryDaemonSessionStore(time.Minute, time.Hour),
 		config:          defaultDaemonAuthConfig,
 	}
 	if err := os.MkdirAll(filepath.Dir(authHandler.bootstrapPath), 0o755); err != nil {
@@ -3455,7 +3529,7 @@ func TestRecordProviderHistoryTracksSuccessAndFailure(t *testing.T) {
 	}
 }
 
-func TestBuildRuntimeProviderChainPrefersProvenModelOverCheaperUnprovenModel(t *testing.T) {
+func TestBuildRuntimeProviderChainKeepsExplicitPrimaryFirst(t *testing.T) {
 	tempDir := t.TempDir()
 	catalogPath := filepath.Join(tempDir, "model_catalog.json")
 	catalog := `{"llm":[{"label":"Test","options":[{"value":"test:cheap-low","label":"Cheap Low","capability_tier":"cheap","reasoning_strength":2,"max_output_tokens":1024,"max_tool_turns":3,"compact_prompt":true,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":0.1,"output_cost_per_1m_tokens":0.2},{"value":"test:expensive-high","label":"Expensive High","capability_tier":"strong","reasoning_strength":5,"max_output_tokens":4096,"max_tool_turns":8,"compact_prompt":false,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":3.0,"output_cost_per_1m_tokens":12.0}]}]}`
@@ -3473,7 +3547,7 @@ func TestBuildRuntimeProviderChainPrefersProvenModelOverCheaperUnprovenModel(t *
 	}
 
 	chain := buildRuntimeProviderChain("test:cheap-low", "primary-key", "cheap-low", "https://primary", map[string]llmCredential{
-		"test": {APIKey: "pool-key", Model: "expensive-high", URL: "https://expensive", SuccessCount: 7, FailureCount: 1, LastSuccessAtMS: 2000},
+		"test": {APIKey: "pool-key", Model: "expensive-high", URL: "https://expensive"},
 	}, "medium")
 	if len(chain) != 2 {
 		t.Fatalf("expected 2 candidates, got %d: %+v", len(chain), chain)
@@ -3482,7 +3556,31 @@ func TestBuildRuntimeProviderChainPrefersProvenModelOverCheaperUnprovenModel(t *
 		t.Fatalf("expected explicit primary model to stay first, got %+v", chain)
 	}
 	if chain[1].Model != "expensive-high" {
-		t.Fatalf("expected proven model to outrank the cheaper but unproven model, got %+v", chain)
+		t.Fatalf("expected the configured pool candidate after the explicit primary, got %+v", chain)
+	}
+}
+
+func TestProviderOutcomeRecordingDoesNotChangeCandidateOrder(t *testing.T) {
+	pool := map[string]llmCredential{
+		"custom-a": {APIKey: "a-key", Model: "a-model", UpdatedAtMS: 100},
+		"custom-b": {APIKey: "b-key", Model: "b-model", UpdatedAtMS: 200},
+	}
+	before := buildRuntimeProviderChain("primary:primary-model", "primary-key", "primary-model", "", pool, "low")
+	updated := recordLLMProviderOutcome(pool, "custom-a", false, 999)
+	if updated["custom-a"].UpdatedAtMS != pool["custom-a"].UpdatedAtMS {
+		t.Fatalf("recording a runtime outcome must not change credential config recency: before=%d after=%d", pool["custom-a"].UpdatedAtMS, updated["custom-a"].UpdatedAtMS)
+	}
+	after := buildRuntimeProviderChain("primary:primary-model", "primary-key", "primary-model", "", updated, "low")
+	if len(before) != len(after) {
+		t.Fatalf("candidate count changed after outcome recording: before=%d after=%d", len(before), len(after))
+	}
+	for index := range before {
+		if before[index].Provider != after[index].Provider || before[index].Model != after[index].Model {
+			t.Fatalf("provider outcome changed pool order at %d: before=%+v after=%+v", index, before, after)
+		}
+	}
+	if updated["custom-a"].FailureCount != pool["custom-a"].FailureCount+1 || updated["custom-a"].LastFailureAtMS != 999 {
+		t.Fatalf("expected failure telemetry to be recorded independently: %#v", updated["custom-a"])
 	}
 }
 

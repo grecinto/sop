@@ -2,8 +2,10 @@ package generator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	log "log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -11,9 +13,8 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
-// FallbackGenerator implements multi-provider failover for sustained throughput and quality.
-// GUARDRAIL: If one provider experiences outages or traffic spikes, automatically switch
-// to an equivalent model on a different provider using the same NDJSON streaming format.
+// FallbackGenerator implements request-level failover for recognized transient provider
+// availability errors. It does not rank providers by answer quality or historical outcomes.
 type FallbackGenerator struct {
 	primary   ai.Generator
 	fallbacks []ai.Generator
@@ -112,7 +113,8 @@ func (fg *FallbackGenerator) ReActTurnStrategy() ai.ReActTurnStrategy {
 	return nil
 }
 
-// Generate attempts to generate using the primary provider, falling back to alternatives on failure.
+// Generate attempts the configured primary first and tries alternatives only when the
+// failure is recognized as transient and retryable.
 func (fg *FallbackGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
 	// Try primary first if circuit is closed
 	if fg.primary != nil && !fg.isCircuitOpen(fg.primary.Name()) {
@@ -184,53 +186,90 @@ func (fg *FallbackGenerator) isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		return networkError.Timeout() || networkError.Temporary()
+	}
 
 	errStr := strings.ToLower(err.Error())
 
-	// Network and infrastructure errors - definitely retry
+	// Explicit caller/configuration failures are not repaired by changing providers.
+	if containsAnyErrorMarker(errStr,
+		"401", "unauthorized", "authentication failed",
+		"403", "forbidden",
+		"400", "bad request", "422", "unprocessable entity",
+		"invalid", "missing api key", "api key is required",
+		"unsupported model", "unsupported provider", "context canceled",
+	) {
+		return false
+	}
+
+	// Retry only recognized transient network, capacity, or provider-availability errors.
 	if strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "deadline exceeded") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "no such host") ||
-		strings.Contains(errStr, "network") ||
-		strings.Contains(errStr, "dial") ||
-		strings.Contains(errStr, "503") ||
-		strings.Contains(errStr, "502") ||
-		strings.Contains(errStr, "504") {
+		strings.Contains(errStr, "network error") ||
+		strings.Contains(errStr, "network is unreachable") ||
+		strings.Contains(errStr, "temporary failure") ||
+		strings.Contains(errStr, "dial tcp") ||
+		strings.Contains(errStr, "dial udp") ||
+		strings.Contains(errStr, "internal server error") ||
+		containsHTTPStatus(errStr, "408", "429", "500", "502", "503", "504") {
 		return true
 	}
 
-	// Rate limiting and capacity errors - retry with different provider
+	// Capacity responses are safe to fail over to a different configured provider.
 	if strings.Contains(errStr, "rate limit") ||
-		strings.Contains(errStr, "429") ||
 		strings.Contains(errStr, "quota") ||
 		strings.Contains(errStr, "overload") ||
 		strings.Contains(errStr, "capacity") {
 		return true
 	}
 
-	// Server errors - retry
-	if strings.Contains(errStr, "500") ||
-		strings.Contains(errStr, "internal server") {
-		return true
-	}
-
-	// API availability errors
-	if strings.Contains(errStr, "unavailable") ||
+	if strings.Contains(errStr, "service unavailable") ||
+		strings.Contains(errStr, "temporarily unavailable") ||
 		strings.Contains(errStr, "maintenance") {
 		return true
 	}
 
-	// Don't retry on authentication, validation, or client errors
-	if strings.Contains(errStr, "401") ||
-		strings.Contains(errStr, "403") ||
-		strings.Contains(errStr, "400") ||
-		strings.Contains(errStr, "invalid") ||
-		strings.Contains(errStr, "missing api key") {
-		return false
-	}
+	// Unknown failures may represent bugs or task/input problems, not provider health.
+	return false
+}
 
-	// Default: try fallback for unknown errors
-	return true
+func containsAnyErrorMarker(message string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHTTPStatus(message string, statuses ...string) bool {
+	for _, status := range statuses {
+		for _, marker := range []string{
+			"status " + status,
+			"status=" + status,
+			"status code " + status,
+			"status code: " + status,
+			"http " + status,
+			"http status " + status,
+			"http/" + status,
+			"(" + status + ")",
+		} {
+			if strings.Contains(message, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (fg *FallbackGenerator) isCircuitOpen(provider string) bool {
