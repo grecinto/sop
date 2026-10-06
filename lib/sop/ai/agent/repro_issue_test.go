@@ -298,12 +298,11 @@ func TestReproLoadFailedError_Native(t *testing.T) {
 	// We need a MockGenerator that returns the tool call
 	// We use the existing store "employees" to verify success.
 	toolCall := map[string]any{
-		"tool": "select",
+		"tool": "investigation_scan",
 		"args": map[string]any{
-			"store":     "employees",
-			"fields":    []string{"region", "name", "salary"},
-			"key_match": map[string]any{"region": "APAC", "department": "HR"},
-			"limit":     5,
+			"database": "testdb",
+			"store":    "employees",
+			"limit":    5,
 		},
 	}
 	toolCallJSON, _ := json.Marshal(toolCall)

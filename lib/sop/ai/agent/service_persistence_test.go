@@ -15,7 +15,7 @@ func TestScriptDrafting_Persistence(t *testing.T) {
 	// Minimal domain/mocks needed for NewService
 	svc := NewService(&MockDomain{}, nil, nil, &MockGenerator{Response: "OK"}, nil, nil, false)
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: map[string]any{}})
 
 	// 1. Start Draft
 	// Request 1: /create

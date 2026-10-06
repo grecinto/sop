@@ -27,7 +27,8 @@ func TestShortTermMemory_PersistAndRehydrate(t *testing.T) {
 		Label:       "Test Feature Implementation",
 		StreamState: WorkStreamActive,
 		StreamContext: &WorkStreamContext{
-			CurrentPhase: "execution",
+			CurrentPhase:  "execution",
+			WorkspaceRoot: "/workspace/project",
 			StructuredPlan: &cw.StructuredPlan{
 				Objective:     "Repair and validate parser behavior",
 				WorkflowShape: "repair",
@@ -110,6 +111,9 @@ func TestShortTermMemory_PersistAndRehydrate(t *testing.T) {
 
 	if restoredThread.StreamContext.CurrentPhase != "execution" {
 		t.Errorf("Expected CurrentPhase %s, got %s", "execution", restoredThread.StreamContext.CurrentPhase)
+	}
+	if restoredThread.StreamContext.WorkspaceRoot != "/workspace/project" {
+		t.Fatalf("expected workspace root to persist, got %q", restoredThread.StreamContext.WorkspaceRoot)
 	}
 	if restoredThread.StreamContext.StructuredPlan == nil {
 		t.Fatal("StructuredPlan not restored")

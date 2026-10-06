@@ -569,7 +569,7 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 	}
 }
 
-func TestEnsureCapabilityRegistry_RegistersOnlyActiveCodingPhases(t *testing.T) {
+func TestEnsureCapabilityRegistryDoesNotRegisterPhaseInstancesGlobally(t *testing.T) {
 	SetLocalDesktopAutomationEnabled(true)
 	defer SetLocalDesktopAutomationEnabled(false)
 
@@ -581,17 +581,9 @@ func TestEnsureCapabilityRegistry_RegistersOnlyActiveCodingPhases(t *testing.T) 
 		ids[cap.ID()] = true
 	}
 
-	for _, expected := range []string{"phase_investigation", "phase_planning", "phase_execution"} {
-		if !ids[expected] {
-			t.Fatalf("expected capability registry to include %s, got %v", expected, ids)
-		}
-	}
-	// The registry is shared across domains, so generic phase IDs like phase_review may
-	// still be present for stores/spaces. This assertion only guards against stale coding-only
-	// runtime surfaces that should no longer be registered by default.
-	for _, unexpected := range []string{"phase_intake", "phase_testing", "phase_delivery"} {
-		if ids[unexpected] {
-			t.Fatalf("did not expect capability registry to include legacy coding phase %s, got %v", unexpected, ids)
+	for id := range ids {
+		if strings.HasPrefix(id, "phase_") {
+			t.Fatalf("phase capability %s should be created per Ask turn, got global registry IDs %v", id, ids)
 		}
 	}
 }

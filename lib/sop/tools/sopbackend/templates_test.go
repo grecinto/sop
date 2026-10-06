@@ -799,6 +799,28 @@ func TestChatSettingsModalExposesDedicatedProviderKeyInputs(t *testing.T) {
 	}
 }
 
+func TestPreferredLLMSelectorOnlyShowsConfiguredPoolCatalogModels(t *testing.T) {
+	scriptsPath := templatePath("scripts_part10.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read preferred LLM selector script: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{
+		"const catalogValues = new Set((setupWizardModelCatalog?.llm || []).flatMap",
+		"option.dataset.injected === 'env' || !catalogValues.has(option.value)",
+		"const configuredPoolKey = poolKey || (configKey && (config[configKey] || '').trim());",
+		".filter(option => isChatPoolModelOptionAvailable(option, config))",
+	} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected Preferred LLM selector to enforce Pool catalog membership with %q", token)
+		}
+	}
+	if strings.Contains(scriptsContent, "isChatPoolModelOptionAvailable(option, config) || option.value === preferredValue") {
+		t.Fatal("Preferred LLM selector must not retain a preferred model outside the configured Pool catalog")
+	}
+}
+
 func TestSetupWizardExposesDedicatedProviderKeyInputs(t *testing.T) {
 	indexPath := templatePath("index.html")
 	indexData, err := os.ReadFile(indexPath)

@@ -72,13 +72,14 @@ func TestRealDBIntegration_JoinFlow(t *testing.T) {
 		{"op": "open_store", "args": {"name": "users_orders", "transaction": "tx"}, "result_var": "users_orders"},
 		{"op": "open_store", "args": {"name": "orders", "transaction": "tx"}, "result_var": "orders"},
 
-		{"op": "scan", "args": {"store": "users", "filter": {"first_name": "John"}, "stream": true}, "result_var": "a"},
+		{"op": "scan", "args": {"store": "users", "stream": true}, "result_var": "a"},
+		{"op": "filter", "input_var": "a", "args": {"condition": {"first_name": {"$eq": "John"}}}, "result_var": "john_users"},
 
-		{"op": "join", "input_var": "a", "args": {"store": "users_orders", "alias": "b", "on": {"key": "key"}}, "result_var": "b_joined"},
+		{"op": "join_right", "input_var": "john_users", "args": {"store": "users_orders", "on": {"key": "key"}}, "result_var": "b_joined"},
 
-		{"op": "join", "input_var": "b_joined", "args": {"store": "orders", "alias": "c", "on": {"value": "key"}}, "result_var": "final"},
+		{"op": "join_right", "input_var": "b_joined", "args": {"store": "orders", "on": {"value": "key"}}, "result_var": "final"},
 
-		{"op": "project", "input_var": "final", "args": {"fields": [{"Dst": "Customer", "Src": "a.first_name"}, {"Dst": "Order", "Src": "c.key"}, {"Dst": "Total", "Src": "c.total_amount"}]}, "result_var": "view"},
+		{"op": "project", "input_var": "final", "args": {"fields": [{"Dst": "Customer", "Src": "users.first_name"}, {"Dst": "Order", "Src": "orders.key"}, {"Dst": "Total", "Src": "orders.total_amount"}]}, "result_var": "view"},
 		
 		{"op": "return", "args": {"value": "view"}}
 	]`

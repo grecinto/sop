@@ -30,6 +30,12 @@ Data Manager Send
 
 There is one production Send action in AI Studio. Direct `/api/cline/*` routes are for tests and diagnostics, not an alternate production controller. See [Cline SDK integration](CLINE_COPILOT_INTEGRATION_PLAN.md) and the [backend contract](IDE_COPILOT_BACKEND_SDK.md).
 
+### Coding Workspace Selection in Ask
+
+Repository selection is part of the Ask conversation, not a Cline-specific user setting. At the start of a coding objective, Ask uses an explicit path from the current request or a reliable workspace already established for that session. If the target is missing or ambiguous, Ask asks which repository or folder to work in and pauses before delegating or making repository changes. The user's answer resumes the same Ask objective, and Ask passes the selected daemon-visible path as the delegated workspace root.
+
+The user can change scope in a later turn by naming another repository or folder. Ask treats an explicit switch as authoritative for subsequent coding work; a repository change gets an isolated backend session, while a narrower folder request limits the task scope. If the switch is unclear, Ask confirms it before editing. Paths must exist on the machine running the daemon. The coding backend remains an implementation detail; the user interacts with Ask through the standard Chat Send action.
+
 The AI Studio Chat header's **Preferred LLM** selector shows the current primary model and lets you change it for subsequent messages. The final **Pool config** option opens the provider-key settings; choosing a preferred model does not disable Northstar AI's configured fallback behavior.
 
 ## Privacy and Provider Keys

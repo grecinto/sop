@@ -65,7 +65,11 @@ func newBasePhase(phaseID, name, description, domain string, infra *SharedInfras
 }
 
 func (b *BasePhase) ID() string {
-	return "phase_" + b.phaseID
+	domain := strings.ToLower(strings.TrimSpace(b.domain))
+	if domain == "" {
+		return "phase_" + b.phaseID
+	}
+	return "phase_" + domain + "_" + b.phaseID
 }
 
 func (b *BasePhase) Name() string {

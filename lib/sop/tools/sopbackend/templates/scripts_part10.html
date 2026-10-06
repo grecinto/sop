@@ -811,16 +811,12 @@
     function isChatPoolModelOptionAvailable(option, config) {
         const parts = splitProviderValue(option.value || '');
         if (!parts.provider) return false;
-        if (isLocalProviderValue(option.value)) return true;
 
         const normalizedProvider = normalizeProviderSecretKey(parts.provider);
         const poolKey = getProviderPoolInputValue('chat-settings', parts.provider);
         const configKey = providerSecretField(parts.provider);
-        const envKey = findEnvProviderOption(parts.provider, parts.model)?.api_key || '';
-        const primaryKey = normalizeProviderSecretKey(config.brain_provider) === normalizedProvider
-            ? config.brain_api_key || ''
-            : '';
-        return !!(poolKey || (configKey && config[configKey]) || envKey || primaryKey);
+        const configuredPoolKey = poolKey || (configKey && (config[configKey] || '').trim());
+        return !!(normalizedProvider && configuredPoolKey);
     }
 
     function renderChatPreferredLLMOptions(aiConfig) {
@@ -830,16 +826,17 @@
 
         const config = aiConfig || {};
         const preferredValue = buildProviderValue(config.brain_provider, config.brain_model);
+        const catalogValues = new Set((setupWizardModelCatalog?.llm || []).flatMap(group =>
+            (group.options || []).map(option => option.value).filter(Boolean)
+        ));
         const optionByValue = new Map();
         Array.from(sourceSelect.options).forEach(option => {
-            if (!option.value) return;
+            if (!option.value || option.dataset.injected === 'env' || !catalogValues.has(option.value)) return;
             const current = optionByValue.get(option.value);
-            if (!current || option.dataset.injected === 'env') {
-                optionByValue.set(option.value, option);
-            }
+            if (!current) optionByValue.set(option.value, option);
         });
         const options = Array.from(optionByValue.values())
-            .filter(option => isChatPoolModelOptionAvailable(option, config) || option.value === preferredValue)
+            .filter(option => isChatPoolModelOptionAvailable(option, config))
             .sort((left, right) => {
                 const leftPreferred = left.value === preferredValue;
                 const rightPreferred = right.value === preferredValue;

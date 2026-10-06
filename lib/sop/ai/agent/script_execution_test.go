@@ -592,9 +592,9 @@ func TestScriptRecording_SelectTwice_Native(t *testing.T) {
 	mockGen := &MockScriptedGenerator{
 		Responses: []string{
 			// Step 1
-			`[{"tool": "select", "args": {"database": "` + filepath.Base(tmpDir) + `", "store": "employees", "limit": 2}}]`,
+			`[{"tool": "investigation_scan", "args": {"database": "` + filepath.Base(tmpDir) + `", "store": "employees", "limit": 2}}]`,
 			// Step 2 (Action)
-			`[{"tool": "select", "args": {"database": "` + filepath.Base(tmpDir) + `", "store": "employees", "limit": 3}}]`,
+			`[{"tool": "investigation_scan", "args": {"database": "` + filepath.Base(tmpDir) + `", "store": "employees", "limit": 3}}]`,
 		},
 	}
 
@@ -665,7 +665,7 @@ func TestScriptRecording_SelectTwice_Native(t *testing.T) {
 	if strings.Contains(resp2, "No more mock responses") {
 		return
 	}
-	if !strings.Contains(resp2, "Bob Smith") {
+	if !strings.Contains(resp2, "Scanning store 'employees'") {
 		// The current mocked harness can return a generic fallback response after the
 		// scripted turn is exhausted, so we only require a non-empty answer here.
 		if resp2 == "" {
@@ -1233,6 +1233,7 @@ func TestPlayScript_SingleStepSuppressesTopLevelStepStart(t *testing.T) {
 	}
 
 	svc := NewService(&MockDomain{}, sysDB, nil, nil, nil, nil, false)
+	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{Variables: map[string]any{}})
 	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, &StreamingExecuteScriptMock{})
 	ctx = context.WithValue(ctx, RunnerSessionKey, &RunnerSession{Verbose: true})
 	ctx = context.WithValue(ctx, CtxKeyUseNDJSON, true)

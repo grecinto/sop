@@ -479,6 +479,10 @@ func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T)
 
 	instructions := cap.BuildInstructions(query, capabilities.RoutingState{})
 	for _, want := range []string{
+		"Keep workspace selection inside Northstar AI Ask",
+		"ask the user which repository or folder",
+		"switch repository or folder",
+		"Pass the established workspace root on every delegated task",
 		"normal Ask turns",
 		"never as a workflow handoff",
 		"Current Continue continuity hint: review",
@@ -492,6 +496,53 @@ func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T)
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("expected dynamic instructions to contain %q, got %q", want, instructions)
 		}
+	}
+}
+
+func TestCapabilityDelegateTaskPersistsExplicitWorkspaceSwitch(t *testing.T) {
+	backend := &fakeBackend{result: `{"status":"completed","summary":"done"}`}
+	capability := NewCapability()
+	capability.SetBackend(synchronousCodingBackend{fakeBackend: backend})
+	payload := &ai.SessionPayload{
+		SessionID: "session-workspace-switch",
+		Variables: map[string]any{"workspace_root": "/old/repo"},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	_, err := capability.ExecuteTool(ctx, "delegate_continue_task", map[string]any{
+		"task":           "Fix the parser tests in the new repository",
+		"workspace_root": "/new/repo",
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("delegate_continue_task failed: %v", err)
+	}
+	if backend.lastRequest.WorkspaceRoot != "/new/repo" {
+		t.Fatalf("expected delegated task to use the switched root, got %q", backend.lastRequest.WorkspaceRoot)
+	}
+	if got := payload.Variables["workspace_root"]; got != "/new/repo" {
+		t.Fatalf("expected switched root to persist in the active session, got %#v", got)
+	}
+}
+
+func TestCapabilityDelegateTaskDoesNotPersistRejectedWorkspaceSwitch(t *testing.T) {
+	backend := &fakeBackend{err: context.Canceled}
+	capability := NewCapability()
+	capability.SetBackend(synchronousCodingBackend{fakeBackend: backend})
+	payload := &ai.SessionPayload{
+		SessionID: "session-workspace-switch-rejected",
+		Variables: map[string]any{"workspace_root": "/old/repo"},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	_, err := capability.ExecuteTool(ctx, "delegate_continue_task", map[string]any{
+		"task":           "Fix tests in the new repository",
+		"workspace_root": "/new/repo",
+	}, capabilities.RoutingState{})
+	if err == nil {
+		t.Fatal("expected backend rejection")
+	}
+	if got := payload.Variables["workspace_root"]; got != "/old/repo" {
+		t.Fatalf("expected rejected workspace to leave active root unchanged, got %#v", got)
 	}
 }
 

@@ -516,11 +516,11 @@ func (a *CopilotAgent) promptBudgetProfile(taskClassification TaskContextClassif
 	}
 
 	if shouldUseLeanStoresAssembly(taskClassification) {
-		profile.TotalChars = 11200
+		profile.TotalChars = 13500
 		profile.ComponentCharBudgets[ComponentPersona] = 900
 		profile.ComponentCharBudgets[ComponentSemanticMemory] = 0
 		profile.ComponentCharBudgets[ComponentSystemTools] = 1800
-		profile.ComponentCharBudgets[ComponentRecipes] = 2200
+		profile.ComponentCharBudgets[ComponentRecipes] = 5000
 		profile.ComponentCharBudgets[ComponentPlaybooks] = 0
 		profile.ComponentCharBudgets[ComponentFocusedContext] = 3200
 		profile.ComponentCharBudgets[ComponentHistory] = 1000

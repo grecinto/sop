@@ -196,7 +196,7 @@ func TestWrapToolResultWithStorage_PreservesTerminalSuccessHintForLargePassingTe
 
 	var sb strings.Builder
 	sb.WriteString("TEST STATUS: PASS\nAll tests passed successfully.\n\n")
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 1000; i++ {
 		sb.WriteString("ok   github.com/sharedcode/sop/agent  0.123s\n")
 	}
 	raw := wrapNativeToolResultEnvelope(sb.String(), &ai.ToolProgressHint{Status: "terminal_success", CompletionDelta: 1.0, Tips: []string{"Tests passed successfully."}})

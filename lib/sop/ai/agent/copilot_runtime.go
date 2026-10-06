@@ -1458,6 +1458,14 @@ func (a *CopilotAgent) handleSlashCommand(ctx context.Context, query string, gen
 		return true, "No active runtime memory available to clear.", nil
 	}
 
+	if err == nil && (toolName == "workspace" || toolName == "repo") {
+		thread := a.currentConversationThread()
+		if thread == nil || thread.StreamContext == nil || strings.TrimSpace(thread.StreamContext.WorkspaceRoot) == "" {
+			return true, "Current coding workspace: (none set).", nil
+		}
+		return true, "Current coding workspace: " + strings.TrimSpace(thread.StreamContext.WorkspaceRoot), nil
+	}
+
 	if err == nil && toolName != "" {
 		res, execErr := a.Execute(ctx, toolName, args)
 		if execErr != nil {

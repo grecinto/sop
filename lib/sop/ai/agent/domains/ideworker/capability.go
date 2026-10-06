@@ -12,7 +12,7 @@ import (
 
 const (
 	CapabilityID                = "ide_worker"
-	CapabilityName              = "Continue Delegation"
+	CapabilityName              = "Cline Coding"
 	inspectContinueToolName     = "inspect_continue_worker"
 	delegateContinueToolName    = "delegate_continue_task"
 	getDelegationStatusToolName = "get_continue_delegation_status"
@@ -128,10 +128,11 @@ type DelegationSupport interface {
 }
 
 type Capability struct {
-	backend Backend
+	backend        Backend
+	capabilityName string
 }
 
-func NewCapability() *Capability { return &Capability{} }
+func NewCapability() *Capability { return &Capability{capabilityName: CapabilityName} }
 
 func (c *Capability) HasBackend() bool {
 	if c == nil || c.backend == nil {
@@ -152,11 +153,25 @@ func (c *Capability) OwnsCodingWorkflow() bool {
 }
 
 func (c *Capability) SetBackend(backend Backend) {
+	if c == nil {
+		return
+	}
 	c.backend = backend
+	c.capabilityName = CapabilityName
+	if namer, ok := backend.(interface{ CodingCapabilityName() string }); ok {
+		if name := strings.TrimSpace(namer.CodingCapabilityName()); name != "" {
+			c.capabilityName = name
+		}
+	}
 }
 
-func (c *Capability) ID() string   { return CapabilityID }
-func (c *Capability) Name() string { return CapabilityName }
+func (c *Capability) ID() string { return CapabilityID }
+func (c *Capability) Name() string {
+	if c == nil || strings.TrimSpace(c.capabilityName) == "" {
+		return CapabilityName
+	}
+	return c.capabilityName
+}
 
 func (c *Capability) Entitlement() capabilities.Entitlement {
 	return capabilities.Entitlement{
@@ -284,7 +299,11 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	metadata := parseContinuePromptMetadata(query)
 	_ = state
-	instructions := `IDE Worker Delegation Guidance:
+	instructions := `Coding workspace and delegation guidance:
+- Keep workspace selection inside Northstar AI Ask; do not expose the configured coding backend as a user-facing choice or ask the user to configure a backend-specific setting.
+- At the start of a coding objective, use an explicit workspace path from the current request or a reliable, already-established session workspace. If neither is available or the target is ambiguous, ask the user which repository or folder to work in using the normal Ask clarification flow, then pause until they answer. Do not guess from the daemon process working directory.
+- Treat a user's later request to switch repository or folder as an update to the active coding scope. Use that root for subsequent investigation and delegation; keep the existing scope only when the user has not changed it.
+- Pass the established workspace root on every delegated task. A repository switch must use the new root so the backend starts an isolated workspace session; a narrower folder request should limit the delegated task to that folder.
 - This capability exposes one Ask-visible delegation tool: delegate_continue_task (legacy name).
 - IDE-originated requests remain normal Ask turns. Treat bridge metadata as delegation constraints, never as a workflow handoff.
 - Before any edit, state the immediate objective and expected scope in one sentence. Prefer the smallest valid change over a broad rewrite.
@@ -463,8 +482,10 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	if model, ok := args["model"].(string); ok && strings.TrimSpace(model) != "" {
 		req.Model = strings.TrimSpace(model)
 	}
+	workspaceRootOverride := ""
 	if workspaceRoot, ok := args["workspace_root"].(string); ok && strings.TrimSpace(workspaceRoot) != "" {
-		req.WorkspaceRoot = strings.TrimSpace(workspaceRoot)
+		workspaceRootOverride = strings.TrimSpace(workspaceRoot)
+		req.WorkspaceRoot = workspaceRootOverride
 	}
 	if activeFile, ok := args["active_file"].(string); ok && strings.TrimSpace(activeFile) != "" {
 		req.ActiveFile = strings.TrimSpace(activeFile)
@@ -543,14 +564,29 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 		return "", fmt.Errorf("session id is required to delegate an IDE worker task")
 	}
 	if owner, ok := c.backend.(CodingWorkflowOwner); ok && owner.OwnsCodingWorkflow() {
-		return c.backend.ExecuteTask(ctx, req)
+		result, err := c.backend.ExecuteTask(ctx, req)
+		if err == nil {
+			persistDelegatedWorkspaceRoot(payload, workspaceRootOverride)
+		}
+		return result, err
 	}
 
 	handle, err := c.backend.StartTask(ctx, req)
 	if err != nil {
 		return "", err
 	}
+	persistDelegatedWorkspaceRoot(payload, workspaceRootOverride)
 	return formatDelegationHandle(handle), nil
+}
+
+func persistDelegatedWorkspaceRoot(payload *ai.SessionPayload, workspaceRoot string) {
+	if payload == nil || strings.TrimSpace(workspaceRoot) == "" {
+		return
+	}
+	if payload.Variables == nil {
+		payload.Variables = make(map[string]any)
+	}
+	payload.Variables["workspace_root"] = strings.TrimSpace(workspaceRoot)
 }
 
 func splitProviderModel(providerModel, fallbackModel string) (string, string) {

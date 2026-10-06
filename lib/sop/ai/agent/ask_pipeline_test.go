@@ -306,6 +306,41 @@ func TestAskCore_AmbiguousDaemonAskOffersCodingOrDesktop(t *testing.T) {
 	}
 }
 
+func TestCodingWorkspaceRootRestoresFromActiveWorkStream(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{ID: sop.NewUUID(), StreamState: WorkStreamActive}
+	thread.InitializeWorkStream("investigation")
+	thread.StreamContext.WorkspaceRoot = "/repo/active"
+	ag.service.session.Memory.AddThread(thread)
+
+	payload := &ai.SessionPayload{Variables: map[string]any{"workspace_root": "/repo/request-default"}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	ag.restoreCodingWorkspaceRoot(ctx)
+
+	if got := payload.Variables["workspace_root"]; got != "/repo/active" {
+		t.Fatalf("expected active WorkStream root to override request default, got %#v", got)
+	}
+}
+
+func TestCodingWorkspaceRootPersistsToActiveWorkStream(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{ID: sop.NewUUID(), StreamState: WorkStreamActive}
+	thread.InitializeWorkStream("investigation")
+	ag.service.session.Memory.AddThread(thread)
+
+	payload := &ai.SessionPayload{Variables: map[string]any{"workspace_root": "/repo/selected"}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	ag.persistCodingWorkspaceRoot(ctx, "execution")
+
+	if got := thread.StreamContext.WorkspaceRoot; got != "/repo/selected" {
+		t.Fatalf("expected selected coding root to persist on active WorkStream, got %q", got)
+	}
+}
+
 // TestAskPhaseFactoryIntegration tests that the Ask pipeline can create phase proxies.
 func TestAskPhaseFactoryIntegration(t *testing.T) {
 	agent := &CopilotAgent{}
@@ -357,11 +392,11 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsExecutionPhase(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 
-	if !toolNames["run_tests"] {
-		t.Fatalf("expected execution phase to expose run_tests, got %v", toolNames)
+	if !toolNames["execution_run_tests"] {
+		t.Fatalf("expected execution phase to expose execution_run_tests, got %v", toolNames)
 	}
-	if !toolNames["apply_patch"] {
-		t.Fatalf("expected execution phase to expose apply_patch, got %v", toolNames)
+	if !toolNames["execution_apply_patch"] {
+		t.Fatalf("expected execution phase to expose execution_apply_patch, got %v", toolNames)
 	}
 	if toolNames["investigation_inspect_repo"] {
 		t.Fatalf("did not expect execution phase to expose investigation tools, got %v", toolNames)
@@ -427,14 +462,14 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.
 		toolNames[tool.Name] = true
 	}
 
-	if !toolNames["search_repo"] {
-		t.Fatalf("expected investigation phase to expose search_repo, got %v", toolNames)
+	if !toolNames["investigation_search_repo"] {
+		t.Fatalf("expected investigation phase to expose investigation_search_repo, got %v", toolNames)
 	}
-	if !toolNames["run_tests"] {
-		t.Fatalf("expected investigation phase to expose run_tests, got %v", toolNames)
+	if !toolNames["investigation_run_tests"] {
+		t.Fatalf("expected investigation phase to expose investigation_run_tests, got %v", toolNames)
 	}
-	if !toolNames["compile_artifact_inventory"] {
-		t.Fatalf("expected investigation phase to expose compile_artifact_inventory, got %v", toolNames)
+	if !toolNames["investigation_compile_artifact_inventory"] {
+		t.Fatalf("expected investigation phase to expose investigation_compile_artifact_inventory, got %v", toolNames)
 	}
 	// After simplification: Only current phase tools are exposed (no look-ahead to planning/execution)
 	if toolNames["planning_plan_changes"] {
@@ -568,9 +603,11 @@ func TestResolvePhasePlan_CanonicalizesCodingWorkStreamPlanOnResume(t *testing.T
 	ag.service.session.Memory.AddThread(thread)
 
 	plan, currentPhase := ag.resolvePhasePlan(context.Background(), &AskTaskContext{
-		Domains:   []string{"coding_workflow"},
-		Phase:     "investigation",
-		PhasePlan: []string{"investigation", "planning", "execution"},
+		Domains:            []string{"coding_workflow"},
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		ExecutionReady:     true,
+		OrchestrationLevel: orchestrationManagedObjective,
 	})
 	if strings.Join(plan, ",") != "investigation,planning,execution" {
 		t.Fatalf("expected resumed coding plan to normalize to investigation,planning,execution, got %v", plan)
@@ -624,14 +661,16 @@ func TestResolvePhasePlan_AttachesExecutionBriefForFailingTests(t *testing.T) {
 	ag.service.session.Memory.AddThread(thread)
 
 	plan, currentPhase := ag.resolvePhasePlan(context.Background(), &AskTaskContext{
-		Domains:       []string{"coding_workflow"},
-		Phase:         "execution",
-		PhasePlan:     []string{"investigation", "planning", "execution"},
-		Intent:        "generate_code",
-		CRUD:          []string{"R", "U"},
-		Confidence:    "high",
-		Reasoning:     "repo repair requires evidence then implementation",
-		OriginalQuery: "fix failing tests in the parser package",
+		Domains:            []string{"coding_workflow"},
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		CRUD:               []string{"R", "U"},
+		ExecutionReady:     true,
+		OrchestrationLevel: orchestrationManagedObjective,
+		Confidence:         "high",
+		Reasoning:          "repo repair requires evidence then implementation",
+		OriginalQuery:      "fix failing tests in the parser package",
 	})
 
 	if strings.Join(plan, ",") != "investigation,planning,execution" {
@@ -650,8 +689,8 @@ func TestResolvePhasePlan_AttachesExecutionBriefForFailingTests(t *testing.T) {
 	if len(brief.Steps) < 5 {
 		t.Fatalf("expected multiple execution steps, got %#v", brief.Steps)
 	}
-	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "failing tests") {
-		t.Fatalf("expected first step to target failing tests, got %#v", brief.Steps[0])
+	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "failing package") {
+		t.Fatalf("expected first step to identify the active failing package, got %#v", brief.Steps[0])
 	}
 	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "compile the full initial failure inventory") {
 		t.Fatalf("expected first step to require compiling the full initial failure inventory, got %#v", brief.Steps[0])

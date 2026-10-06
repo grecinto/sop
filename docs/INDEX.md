@@ -100,7 +100,7 @@ Dated reports and implementation summaries are evidence of work at a point in ti
 
 - [ASK_V2_VERIFICATION.md](ASK_V2_VERIFICATION.md): historical record of the original feature-flagged Ask V2 path.
 - [AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md](AUTONOMOUS_TEST_FIXING_DEBUG_LOG.md), [PHASE_DEBUGGING_QUICK_REF.md](PHASE_DEBUGGING_QUICK_REF.md), [PHASE_SYSTEM_STATUS_AUG_2026.md](PHASE_SYSTEM_STATUS_AUG_2026.md): debugging and dated phase history.
-- [CHECKLIST_2026_08_30.md](CHECKLIST_2026_08_30.md), [RESUME_2026_08_30.md](RESUME_2026_08_30.md), [RESUME_2026_08_31.md](RESUME_2026_08_31.md): dated session notes; do not use as current task state.
+- [RESUME_2026_10_04.md](RESUME_2026_10_04.md): current session recall marker and next validation steps.
 - [PHASE_AWARE_CONTEXT_OPTIMIZATION.md](PHASE_AWARE_CONTEXT_OPTIMIZATION.md): historical implementation and validation record.
 - [PHASE_TOOL_AVAILABILITY_ASSESSMENT.md](PHASE_TOOL_AVAILABILITY_ASSESSMENT.md), [PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md](PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md): tool-surface research and proposals.
 - [REACT_LOOP_SYNC_GAP_ASSESSMENT.md](REACT_LOOP_SYNC_GAP_ASSESSMENT.md): resolved provider-loop alignment assessment.

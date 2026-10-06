@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
@@ -37,11 +38,14 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	if a.capabilityRegistry == nil {
 		a.capabilityRegistry = capabilities.NewRegistry()
 	}
-	ideWorkerCap := ideworker.NewCapability()
-
 	// Build capability list dynamically based on feature flags.
 	// Desktop automation and coding workflow are local-runtime only and must stay unavailable in HQ.
-	caps := []capabilities.Capability{ideWorkerCap}
+	caps := []capabilities.Capability{}
+	if backendOwnsCodingWorkflow(a.ideWorkerBackend) {
+		ideWorkerCap := ideworker.NewCapability()
+		ideWorkerCap.SetBackend(a.ideWorkerBackend)
+		caps = append(caps, ideWorkerCap)
+	}
 
 	// Stores feature disabled by default for v1 (AI Copilot focus)
 	if StoresFeatureEnabled() {
@@ -153,37 +157,7 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 		// The tool calls (jump_to_phase, pause_workstream, etc.) ARE the orchestration signals
 		// This aligns with implicit orchestration model used in Stores/Spaces domains
 
-		// Coding domain phases (runtime surfaces)
-		// The Ask coding runtime now uses discovery + implementation behavior.
-		// Keep only the active coding surfaces registered by default; legacy phase
-		// names are normalized at Ask resume time for backward compatibility.
-		for _, phaseID := range []string{"investigation", "planning", "execution"} {
-			caps = append(caps, plannerpkg.NewPhase("coding_workflow", phaseID, cwfInfra))
-		}
-
-		// Stores domain phases (methodical query workflow)
-		// Investigation = Read-only (list, scan, describe)
-		// Planning = Query design
-		// Execution = Mutations (create, update, delete)
-		// Review = Validation
-		for _, phaseID := range []string{"investigation", "planning", "execution", "review"} {
-			caps = append(caps, plannerpkg.NewPhase("stores", phaseID, cwfInfra))
-		}
-
-		// Spaces domain phases (knowledge management workflow)
-		// Investigation = Read-only (read_config, list_items)
-		// Execution = Mutations (mint, enrich)
-		// Review = Validation
-		for _, phaseID := range []string{"investigation", "execution", "review"} {
-			caps = append(caps, plannerpkg.NewPhase("spaces", phaseID, cwfInfra))
-		}
-
-		// Desktop domain phases (automation workflow)
-		// Planning = Script creation
-		// Execution = Command execution
-		for _, phaseID := range []string{"planning", "execution"} {
-			caps = append(caps, plannerpkg.NewPhase("desktop", phaseID, cwfInfra))
-		}
+		// Domain phase Capabilities are created per Ask turn by the Phase Factory.
 	}
 
 	for _, cap := range caps {
@@ -1000,13 +974,42 @@ func (a *CopilotAgent) InjectShellSessionManager(mgr desktop.ShellSessionManager
 
 // InjectIDEWorkerBackend injects an IDE worker backend into the IDE worker capability.
 func (a *CopilotAgent) InjectIDEWorkerBackend(backend ideworker.Backend) {
-	if a == nil || a.capabilityRegistry == nil {
+	if a == nil {
 		return
 	}
+	a.ideWorkerBackend = backend
+	a.ensureCapabilityRegistry()
+	if a.capabilityRegistry == nil {
+		return
+	}
+	if !backendOwnsCodingWorkflow(backend) {
+		a.capabilityRegistry.Unregister(ideworker.CapabilityID)
+		return
+	}
+	a.unregisterNativeCodingPhaseCapabilities()
 	for _, cap := range a.capabilityRegistry.ListAll() {
 		if ideCap, ok := cap.(*ideworker.Capability); ok {
 			ideCap.SetBackend(backend)
 			return
+		}
+	}
+	ideCap := ideworker.NewCapability()
+	ideCap.SetBackend(backend)
+	a.capabilityRegistry.Register(ideCap)
+}
+
+func backendOwnsCodingWorkflow(backend ideworker.Backend) bool {
+	owner, ok := backend.(ideworker.CodingWorkflowOwner)
+	return ok && owner.OwnsCodingWorkflow()
+}
+
+func (a *CopilotAgent) unregisterNativeCodingPhaseCapabilities() {
+	if a == nil || a.capabilityRegistry == nil {
+		return
+	}
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if cap != nil && strings.HasPrefix(cap.ID(), "phase_coding_workflow_") {
+			a.capabilityRegistry.Unregister(cap.ID())
 		}
 	}
 }

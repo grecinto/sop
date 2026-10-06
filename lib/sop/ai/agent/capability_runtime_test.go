@@ -20,7 +20,17 @@ type runtimeCodingWorkflowBackendStub struct {
 	runtimeIDEWorkerBackendStub
 }
 
-func (runtimeCodingWorkflowBackendStub) OwnsCodingWorkflow() bool { return true }
+func (runtimeCodingWorkflowBackendStub) OwnsCodingWorkflow() bool     { return true }
+func (runtimeCodingWorkflowBackendStub) CodingCapabilityName() string { return "Cline Coding" }
+
+type runtimeContinueCodingBackendStub struct {
+	runtimeIDEWorkerBackendStub
+}
+
+func (runtimeContinueCodingBackendStub) OwnsCodingWorkflow() bool { return true }
+func (runtimeContinueCodingBackendStub) CodingCapabilityName() string {
+	return "Continue Compatibility"
+}
 
 func (runtimeIDEWorkerBackendStub) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	_ = ctx
@@ -80,18 +90,66 @@ func TestNewCopilotAgentRegistersDesktopCapability(t *testing.T) {
 	}
 }
 
-func TestNewCopilotAgentRegistersIDEWorkerCapability(t *testing.T) {
+func TestNewCopilotAgentDoesNotRegisterCodingBackendWithoutSelection(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	var found bool
 	for _, cap := range ag.capabilityRegistry.ListAll() {
 		if cap != nil && cap.ID() == ideworker.CapabilityID {
-			found = true
-			break
+			t.Fatal("did not expect a coding backend capability before an implementation is selected")
 		}
 	}
-	if !found {
-		t.Fatal("expected IDE worker capability to be registered")
+	for _, cap := range ag.capabilityRegistry.ListAll() {
+		if cap != nil && strings.HasPrefix(cap.ID(), "phase_") {
+			t.Fatalf("phase capability %q should be created per Ask turn, not registered globally", cap.ID())
+		}
 	}
+}
+
+func TestInjectIDEWorkerBackendSelectsOneRegisteredCodingImplementation(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	assertNoGlobalPhases := func() {
+		t.Helper()
+		for _, cap := range ag.capabilityRegistry.ListAll() {
+			if cap != nil && strings.HasPrefix(cap.ID(), "phase_") {
+				t.Fatalf("phase capability %q must be instantiated per Ask turn, not globally registered", cap.ID())
+			}
+		}
+	}
+	assertOnlyWorkerCapability := func(wantName string) {
+		t.Helper()
+		var workerCapabilities []capabilities.Capability
+		for _, cap := range ag.capabilityRegistry.ListAll() {
+			if cap != nil && cap.ID() == ideworker.CapabilityID {
+				workerCapabilities = append(workerCapabilities, cap)
+			}
+		}
+		if wantName == "" {
+			if len(workerCapabilities) != 0 {
+				t.Fatalf("expected no delegated coding capability, got %#v", workerCapabilities)
+			}
+			return
+		}
+		if len(workerCapabilities) != 1 || workerCapabilities[0].Name() != wantName {
+			t.Fatalf("expected exactly one %q coding capability, got %#v", wantName, workerCapabilities)
+		}
+	}
+
+	assertOnlyWorkerCapability("")
+	assertNoGlobalPhases()
+
+	ag.InjectIDEWorkerBackend(runtimeCodingWorkflowBackendStub{})
+	assertOnlyWorkerCapability("Cline Coding")
+	assertNoGlobalPhases()
+
+	ag.InjectIDEWorkerBackend(runtimeContinueCodingBackendStub{})
+	assertOnlyWorkerCapability("Continue Compatibility")
+	assertNoGlobalPhases()
+
+	ag.InjectIDEWorkerBackend(runtimeIDEWorkerBackendStub{})
+	assertOnlyWorkerCapability("")
+	assertNoGlobalPhases()
 }
 
 func TestResolvePlanningContextForDomain_Coding(t *testing.T) {
@@ -99,8 +157,8 @@ func TestResolvePlanningContextForDomain_Coding(t *testing.T) {
 	defer SetLocalDesktopAutomationEnabled(false)
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	contextText := ag.resolvePlanningContextForDomain("fix failing tests in parser", "coding_workflow")
-	if !strings.Contains(contextText, "Coding Planning Context") {
-		t.Fatalf("expected coding planning context, got %q", contextText)
+	if contextText != "" {
+		t.Fatalf("expected coding planning context to remain per-turn rather than globally registered, got %q", contextText)
 	}
 }
 
@@ -155,20 +213,15 @@ func TestNewCopilotAgentRegistersSpacesCapability(t *testing.T) {
 	}
 }
 
-func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T) {
+func TestNewCopilotAgentKeepsPhaseCapabilitiesPerTurn(t *testing.T) {
 	SetLocalDesktopAutomationEnabled(true)
 	defer SetLocalDesktopAutomationEnabled(false)
 
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	var foundPhaseCapability bool
 	for _, cap := range ag.capabilityRegistry.ListAll() {
 		if cap != nil && strings.HasPrefix(cap.ID(), "phase_") {
-			foundPhaseCapability = true
-			break
+			t.Fatalf("phase capability %q should be created per Ask turn, not registered globally", cap.ID())
 		}
-	}
-	if !foundPhaseCapability {
-		t.Fatal("expected local-only coding workflow phase capabilities to be registered when local automation is enabled")
 	}
 }
 
@@ -239,7 +292,7 @@ func TestRegisterTools_RegistersDelegateContinueTaskWhenBackendInjected(t *testi
 	defer SetLocalDesktopAutomationEnabled(false)
 
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	ag.InjectIDEWorkerBackend(runtimeIDEWorkerBackendStub{})
+	ag.InjectIDEWorkerBackend(runtimeContinueCodingBackendStub{})
 	payload := &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}}
 	payload.Variables["RoutingState"] = &TaskContextClassification{
 		Domain:         "coding_workflow",
@@ -369,15 +422,18 @@ func TestNewCopilotAgentAppliesCapabilityOptions(t *testing.T) {
 	}
 }
 
-func TestRegisterToolsSkipsLegacyDomainToolsWithoutCapabilities(t *testing.T) {
+func TestRegisterToolsSkipsDisabledStoresToolsButKeepsSpacesCapability(t *testing.T) {
+	storesEnabled := StoresFeatureEnabled()
+	SetStoresFeatureEnabled(false)
+	defer SetStoresFeatureEnabled(storesEnabled)
 	ag := &CopilotAgent{registry: NewRegistry(), capabilityRegistry: capabilities.NewRegistry()}
 	ag.registerTools(context.Background())
 
 	if _, ok := ag.registry.Get("select"); ok {
 		t.Fatal("expected stores tool registration to be skipped without stores capability")
 	}
-	if _, ok := ag.registry.Get("mint_to_space"); ok {
-		t.Fatal("expected spaces tool registration to be skipped without spaces capability")
+	if _, ok := ag.registry.Get("mint_to_space"); !ok {
+		t.Fatal("expected the always-registered Spaces capability tool to remain available")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/parser"
 )
@@ -13,14 +14,11 @@ func TestCopilotAgent_Ask_SlashCommand(t *testing.T) {
 	// Setup Agent with NO databases
 	cfg := Config{}
 	agent := NewCopilotAgent(cfg, nil, nil)
-	ctx := context.Background()
-	agent.Open(ctx)
-
-	// Inject session payload which is required by Execute
 	payload := &ai.SessionPayload{
 		CurrentDB: "system",
 	}
-	ctx = context.WithValue(ctx, "session_payload", payload)
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	agent.Open(ctx)
 
 	// Case 1: Slash Command with simple args
 	// /list_databases
@@ -31,6 +29,56 @@ func TestCopilotAgent_Ask_SlashCommand(t *testing.T) {
 
 	if strings.Contains(resp, "No valid API Key found") {
 		t.Errorf("Slash command triggered 'No API Key' error. Logic failed.")
+	}
+}
+
+func TestCopilotAgent_Ask_WorkspaceCommandShowsCurrentCodingRoot(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{ID: sop.NewUUID(), StreamState: WorkStreamActive}
+	thread.InitializeWorkStream("investigation")
+	thread.StreamContext.WorkspaceRoot = "/workspace/project"
+	ag.service.session.Memory.AddThread(thread)
+
+	resp, err := ag.Ask(context.Background(), "/workspace", nil)
+	if err != nil {
+		t.Fatalf("/workspace failed: %v", err)
+	}
+	if resp != "Current coding workspace: /workspace/project" {
+		t.Fatalf("unexpected /workspace response: %q", resp)
+	}
+}
+
+func TestCopilotAgent_Ask_WorkspaceCommandReportsNoRoot(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+
+	resp, err := ag.Ask(context.Background(), "/workspace", nil)
+	if err != nil {
+		t.Fatalf("/workspace failed: %v", err)
+	}
+	if resp != "Current coding workspace: (none set)." {
+		t.Fatalf("unexpected /workspace response for unset scope: %q", resp)
+	}
+}
+
+func TestCopilotAgent_Ask_RepoAliasShowsCurrentCodingRoot(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{ID: sop.NewUUID(), StreamState: WorkStreamActive}
+	thread.InitializeWorkStream("investigation")
+	thread.StreamContext.WorkspaceRoot = "/workspace/project"
+	ag.service.session.Memory.AddThread(thread)
+
+	resp, err := ag.Ask(context.Background(), "/repo", nil)
+	if err != nil {
+		t.Fatalf("/repo failed: %v", err)
+	}
+	if resp != "Current coding workspace: /workspace/project" {
+		t.Fatalf("unexpected /repo response: %q", resp)
 	}
 }
 
@@ -126,7 +174,7 @@ func TestCapabilityPrefixRouting_RequiresSlashPrefixes(t *testing.T) {
 		return `{"stdout":"test-ok","stderr":"","exit_code":0}`, nil
 	})
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{Variables: map[string]any{}})
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	agent.Open(ctx)
 

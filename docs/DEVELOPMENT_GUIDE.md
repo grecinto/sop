@@ -52,13 +52,28 @@ The site package can be tested independently with `go test ./src/backend/site ./
 
 ## Site Development
 
-The site Go backend is launched from the repository root with:
+The Northstar AI website is the React frontend served by the Go site backend. Build the frontend from the repository root when its source changes:
+
+```sh
+cd src/frontend
+npm ci
+npm run build
+cd ../..
+```
+
+Run the site and local daemon in separate terminals, both from the repository root:
 
 ```sh
 go run ./src/backend/site
 ```
 
-Build the React frontend from `src/frontend` using its package scripts. The site frontend, shared Data Manager, and local daemon are separate surfaces; test the route/runtime you changed rather than assuming one serves the others.
+```sh
+go run ./lib/sop/cmd/sop-daemon --port 9090
+```
+
+The site listens on `http://localhost:8080` by default and serves the built React files from `src/frontend/dist`. Open the site to use its account and subscription flows. After signing in, launch AI Studio from the site. AI Studio is the shared Data Manager UI, not part of the React app; its runtime toggle switches between HQ and the local daemon. Keep the daemon running and reachable at `http://127.0.0.1:9090` when using local mode. HQ mode connects to the configured hosted backend.
+
+Rebuild the React frontend after changing its source; the Go site serves the build output rather than providing Vite hot reload. The Cline SDK host is also needed for delegated coding tasks; see [Cline integration](CLINE_COPILOT_INTEGRATION_PLAN.md) for its Node.js 22+ setup. The site frontend, shared Data Manager, and local daemon are separate surfaces; test the route/runtime you changed rather than assuming one serves the others.
 
 ## Working Conventions
 

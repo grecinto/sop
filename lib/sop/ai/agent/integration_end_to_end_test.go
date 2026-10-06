@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
@@ -105,8 +106,11 @@ func TestEndToEnd_AskClassification_UsesMultiPhasePlansForComplexWork(t *testing
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(classification.PhasePlan) < 3 {
+	if len(classification.PhasePlan) < 2 {
 		t.Fatalf("expected complex work to yield a multi-phase plan, got %v", classification.PhasePlan)
+	}
+	if got := strings.Join(classification.PhasePlan, ","); got != "planning,execution" {
+		t.Fatalf("expected complex coding plan to use the active planning/execution phases, got %q", got)
 	}
 }
 

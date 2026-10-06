@@ -16,6 +16,7 @@ import (
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/classification"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/jsondb"
@@ -410,6 +411,7 @@ type CopilotAgent struct {
 
 	// capabilityRegistry provides modular domain capabilities for Ask routing and context building.
 	capabilityRegistry *capabilities.Registry
+	ideWorkerBackend   ideworker.Backend
 
 	// Gap 1: Progressive authorization system
 	authzManager *capabilities.AuthorizationManager
@@ -446,10 +448,11 @@ func (a *CopilotAgent) Clone() ai.Agent[map[string]any] {
 		Memory: &memory.MemoryUnit{
 			AgentID: ai.AgentIDOmni, // By default Clone behaves as Omni, Avatars explicitly override
 		},
-		lastToolCall:    nil,
-		service:         nil, // Caller should populate this
-		compiledScripts: make(map[string]CachedScript),
-		StoreOpener:     a.StoreOpener,
+		lastToolCall:     nil,
+		service:          nil, // Caller should populate this
+		compiledScripts:  make(map[string]CachedScript),
+		StoreOpener:      a.StoreOpener,
+		ideWorkerBackend: a.ideWorkerBackend,
 	}
 }
 

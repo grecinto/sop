@@ -409,6 +409,9 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	taskContext = a.applyQueuedPhaseActorContext(ctx, taskContext, persistedAskCtx)
 	taskContext = normalizeCodingRuntimeRouting(taskContext)
 	codingDelegated := a.ideWorkerOwnsCodingWorkflow() && taskContext.AskClassification != nil && askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow")
+	if taskContext.AskClassification != nil && askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow") {
+		a.restoreCodingWorkspaceRoot(ctx)
+	}
 	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
 	if req := buildDefaultDomainOfferClarification(query, taskContext); req != nil {
 		a.updateClarificationState(ctx, query, "", nil, req)
@@ -528,6 +531,9 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if err != nil {
 		return "", err
 	}
+	if taskContext.AskClassification != nil && askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow") {
+		a.persistCodingWorkspaceRoot(ctx, taskContext.AskClassification.Phase)
+	}
 	if !codingDelegated {
 		a.updateStructuredPlanProgressAfterTurn(taskContext.AskClassification, toolCalls, outcomeFacts, clarificationRequest)
 		a.enqueueStructuredPlanContinuationAfterTurn(query, taskContext.AskClassification, previousStructuredPlanStep, clarificationRequest)
@@ -577,6 +583,41 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
 
 	return finalText, nil
+}
+
+func (a *CopilotAgent) restoreCodingWorkspaceRoot(ctx context.Context) {
+	thread := a.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil || strings.TrimSpace(thread.StreamContext.WorkspaceRoot) == "" {
+		return
+	}
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil {
+		return
+	}
+	if payload.Variables == nil {
+		payload.Variables = make(map[string]any)
+	}
+	payload.Variables["workspace_root"] = thread.StreamContext.WorkspaceRoot
+}
+
+func (a *CopilotAgent) persistCodingWorkspaceRoot(ctx context.Context, phase string) {
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil || payload.Variables == nil {
+		return
+	}
+	workspaceRoot, _ := payload.Variables["workspace_root"].(string)
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return
+	}
+	thread := a.currentConversationThread()
+	if thread == nil {
+		return
+	}
+	if thread.StreamContext == nil {
+		thread.InitializeWorkStream(phase)
+	}
+	thread.StreamContext.WorkspaceRoot = workspaceRoot
 }
 
 func buildDefaultDomainOfferClarification(query string, taskContext *TaskContextClassification) *ai.ClarificationRequest {

@@ -83,7 +83,7 @@ func TestToolJoin_ProjectionOrder_WithFieldsString(t *testing.T) {
 
 func TestToolJoin_ProjectionOrder_Complex_Wildcard(t *testing.T) {
 	// 1. Setup DB
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "dev_db", Variables: map[string]any{}})
 	dbPath := "test_proj_order_complex"
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)

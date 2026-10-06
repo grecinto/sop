@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/database"
 	sopdb "github.com/sharedcode/sop/database"
 )
 
 func TestReproEmptyColumns(t *testing.T) {
 	// 1. Setup DB
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "dev_db", Variables: map[string]any{}})
 	dbPath := "test_repro_empty_cols"
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)

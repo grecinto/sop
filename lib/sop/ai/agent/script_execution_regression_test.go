@@ -24,11 +24,12 @@ func TestToolExecuteScript_AcceptsSingleInstructionObject(t *testing.T) {
 		},
 	}
 
-	resultRaw, err := agent.toolExecuteScript(context.Background(), args)
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{Variables: map[string]any{}})
+	resultRaw, err := agent.toolExecuteScript(ctx, args)
 	if err != nil {
 		t.Fatalf("toolExecuteScript should accept single object-shaped script input: %v", err)
 	}
-	result, err := formatToolResult(context.Background(), resultRaw)
+	result, err := formatToolResult(ctx, resultRaw)
 	if err != nil {
 		t.Fatalf("formatToolResult failed: %v", err)
 	}
@@ -52,11 +53,12 @@ func TestToolExecuteScript_AcceptsNestedStepsWrapper(t *testing.T) {
 		},
 	}
 
-	resultRaw, err := agent.toolExecuteScript(context.Background(), args)
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{Variables: map[string]any{}})
+	resultRaw, err := agent.toolExecuteScript(ctx, args)
 	if err != nil {
 		t.Fatalf("toolExecuteScript should unwrap the nested steps wrapper: %v", err)
 	}
-	result, err := formatToolResult(context.Background(), resultRaw)
+	result, err := formatToolResult(ctx, resultRaw)
 	if err != nil {
 		t.Fatalf("formatToolResult failed: %v", err)
 	}

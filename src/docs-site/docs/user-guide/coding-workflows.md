@@ -19,6 +19,16 @@ Northstar AI's LLM-guided approach provides:
 
 You describe what you want, and the AI orchestrates everything—from task classification to tool selection to execution flow.
 
+## Choose and Change the Project
+
+Project selection is part of the coding conversation. Start with the task and, when needed, name the repository or folder you want Northstar AI to work in. For example: “Fix the failing tests in `/path/to/project`.” If the project is not clear from your request or the active coding session, Ask will ask which repository or folder to use before it proceeds with repository investigation or edits.
+
+You can change scope at any point in the same coding task. Say which repository to switch to, or ask to limit the work to a particular folder. Ask uses the new scope for subsequent investigation and implementation; if the requested change is ambiguous, it asks you to clarify before proceeding. A new repository uses isolated coding context rather than carrying the previous repository's working history into it.
+
+You work with Northstar AI Ask through the regular AI Studio Chat. The coding agent is an execution detail, not a separate mode or tool you need to select. The selected path must be accessible to the runtime handling the task (for local development, the machine running the local daemon).
+
+To check the active coding scope, enter `/workspace` (or `/repo`) in Chat. Northstar AI shows the current repository/folder or reports that none is set. The scope is saved with the coding workstream and can be recalled when that workstream is restored after a restart.
+
 ## Works Across Native and Remote Tool Surfaces
 
 Northstar AI can work with both its native tools and connected editor tools.
@@ -32,6 +42,8 @@ In practice, that means Northstar AI can:
 - keep orchestration, memory, and handoff inside Northstar AI
 
 This lets the daemon-managed Cline SDK backend execute a bounded coding task while Northstar AI Ask keeps the request connected to its phases, memory, and workstream.
+
+For test-fixing tasks, Cline can work across languages including Go, C#, Java, Python, and Rust. It can investigate failing tests, make a focused code or test change, run the relevant tests again, and iterate based on the results until they pass or a concrete blocker needs your input. The project toolchain and dependencies must be installed in the runtime environment. The shared native workflow language list below describes that workflow stack, not a limit on Cline.
 
 In the AI Studio chat window, use the **Preferred LLM** selector in the header to change the primary model for subsequent messages. Choose **Pool config** at the bottom of that selector to manage provider keys. The selected model remains the preferred primary while Northstar AI can still use eligible pool fallbacks for availability.
 

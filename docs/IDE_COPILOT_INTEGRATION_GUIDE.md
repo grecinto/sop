@@ -22,6 +22,8 @@ flowchart LR
 
 Keep one production Send action. Ask decides whether and when to delegate; a backend executes one bounded coding task and returns control to Ask. Do not move multi-step workflow orchestration into the backend.
 
+Workspace intake and changes also belong to Ask. It should reuse an explicit or reliable active workspace, clarify with the user before delegation when the root is missing or ambiguous, and pass the selected daemon-visible root on each task. If the user switches repository or folder, update the scope before further work; do not expose a backend-specific workspace setting or worker UI. See [AI Studio workspace selection](AI_STUDIO.md#coding-workspace-selection-in-ask) for the user flow.
+
 The Ask-visible tool name `delegate_continue_task` is a legacy compatibility name. A new backend does not need a Continue dependency or a new UI action.
 
 For the daemon, `workflow_backend=cline` makes Cline the exclusive repository-coding executor: Ask exposes delegation instead of overlapping in-house coding phases/file-shell-Git mutation tools, waits for the bounded Cline result, and does not advance the native coding phase plan for the same turn. If Cline is unavailable or misconfigured, Ask reports a setup error instead of silently switching executors. Specialized PostgreSQL and Splunk tool families remain independent and are not hidden by the coding ownership policy. Choose another backend setting explicitly to opt into an alternate execution path.
@@ -29,6 +31,8 @@ For the daemon, `workflow_backend=cline` makes Cline the exclusive repository-co
 Continue's legacy `/api/continue/*` routes are registered only when `workflow_backend=continue`; they are absent in Cline mode.
 
 Daemon selection is mutually exclusive: `workflow_backend=cline` (default), `continue`, or `native` for Northstar AI's in-house coding phases. The old `daemon`/`shell` values alias `native`. Cline and Continue are fail-closed when their runtime/worker is unavailable; choose `native` explicitly to use the in-house executor.
+
+This is an executor choice, not a change to Ask's phase planner. Cline and Continue use the shared IDE-worker Capability with one selected backend; native mode registers neither worker. Phase Capabilities are never global registry entries: Ask's Phase Factory instantiates the selected phase for each turn and chooses native coding phases only in native mode. The daemon must preserve the selected backend when the shared Service clones its CopilotAgent for a session.
 
 ## SDK Extension Boundary
 

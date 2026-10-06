@@ -135,6 +135,10 @@ func (b *continueIDEWorkerBackend) OwnsCodingWorkflow() bool {
 	return true
 }
 
+func (b *continueIDEWorkerBackend) CodingCapabilityName() string {
+	return "Continue Compatibility"
+}
+
 func (b compositeIDEWorkerBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	state := ideworker.SessionState{SessionID: strings.TrimSpace(sessionID)}
 	var lastErr error
@@ -781,6 +785,14 @@ func parseContinueExecutionResult(body []byte) (continueExecutionResult, bool) {
 func injectIDEWorkerBackend(agentSvc ai.Agent[map[string]any], backend ideworker.Backend) {
 	if copilotAgent, ok := agentSvc.(*sharedagent.CopilotAgent); ok {
 		copilotAgent.InjectIDEWorkerBackend(backend)
+		return
+	}
+	if service, ok := agentSvc.(interface {
+		RegisteredAgent(string) ai.Agent[map[string]any]
+	}); ok {
+		if copilotAgent, ok := service.RegisteredAgent("copilot").(*sharedagent.CopilotAgent); ok {
+			copilotAgent.InjectIDEWorkerBackend(backend)
+		}
 	}
 }
 

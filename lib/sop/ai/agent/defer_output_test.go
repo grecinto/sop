@@ -70,7 +70,7 @@ func TestScriptReturnNilIsHandled(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
 
 	// Script: just defer. LastResult will be nil.
 	// We use the JSON string representation of the script as that's what the tool accepts
@@ -133,7 +133,7 @@ func TestExplicitReturnNil(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
 
 	script := []map[string]any{
 		{

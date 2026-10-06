@@ -236,7 +236,7 @@ func TestExecute_WrapsLargeCommandResultsWithStoredEnvelope(t *testing.T) {
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
 
 	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
-		return `{"stdout":"` + strings.Repeat("large command output line\n", 400) + `","stderr":"","exit_code":0}`, nil
+		return `{"stdout":"` + strings.Repeat("large command output line\n", 1000) + `","stderr":"","exit_code":0}`, nil
 	})
 	defer SetLocalCommandExecutor(nil)
 
@@ -264,8 +264,8 @@ func TestExecute_WrapsLargeCommandResultsWithStoredEnvelope(t *testing.T) {
 	if envelope.FileMetadata == nil || strings.TrimSpace(envelope.FileMetadata.FilePath) == "" {
 		t.Fatalf("expected file metadata for large command result, got %+v", envelope.FileMetadata)
 	}
-	if !strings.Contains(string(envelope.ToolResult), "Use the saved file to confirm the outcome based on your request") {
-		t.Fatalf("expected stored summary guidance, got %s", string(envelope.ToolResult))
+	if !strings.Contains(string(envelope.ToolResult), "Full output:") || !strings.Contains(string(envelope.ToolResult), "Command output captured.") {
+		t.Fatalf("expected stored summary and command guidance, got %s", string(envelope.ToolResult))
 	}
 }
 

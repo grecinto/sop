@@ -14,13 +14,14 @@ import (
 func TestBuildAvatarPrompt(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	agent.registerTools(context.Background()) // Populate registry with default tools
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
 
 	avatarName := "test_expert"
 	taskContext := "Analyze the database schema"
 	customPersona := "You are a database testing Avatar."
 	allowedTools := []string{"list_databases"}
 
-	prompt := agent.buildAvatarPrompt(context.Background(), avatarName, taskContext, customPersona, allowedTools)
+	prompt := agent.buildAvatarPrompt(ctx, avatarName, taskContext, customPersona, allowedTools)
 
 	// Asserts persona injection
 	if !strings.Contains(prompt, "You are a database testing Avatar.") {
@@ -48,11 +49,12 @@ func TestBuildAvatarPrompt(t *testing.T) {
 
 func TestBuildAvatarPrompt_DefaultPersona(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
 
 	avatarName := "blank_expert"
 	taskContext := "Do something blank"
 
-	prompt := agent.buildAvatarPrompt(context.Background(), avatarName, taskContext, "", nil)
+	prompt := agent.buildAvatarPrompt(ctx, avatarName, taskContext, "", nil)
 
 	if !strings.Contains(prompt, "You are the blank_expert Avatar. Your task is strictly limited to your domain.") {
 		t.Errorf("Expected default persona fallback, but got: %s", prompt)

@@ -542,7 +542,7 @@ Running vectorization recovery test...
     main_test.go:430: 
         Error: can't do operation on b-tree if transaction has not begun
 FAIL
-` + strings.Repeat("Additional output\n", 500)
+` + strings.Repeat("Additional output\n", 1000)
 
 	inline, filePath, _, err := storage.StoreResult("run_repo_tests", testOutput)
 	if err != nil {

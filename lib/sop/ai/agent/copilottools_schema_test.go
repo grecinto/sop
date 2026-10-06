@@ -48,7 +48,7 @@ func TestToolListStores_SchemaEnrichment(t *testing.T) {
 	// Need to initialize generic registry if NewCopilotAgent doesn't do it properly for all tools.
 	// But NewCopilotAgent does initialize registry.
 	agent := NewCopilotAgent(Config{}, dbs, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	// 3. Populate Data directly
@@ -93,12 +93,6 @@ func TestToolListStores_SchemaEnrichment(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-
-	// Set Payload for agent tools
-	payload := &ai.SessionPayload{
-		CurrentDB: dbName,
-	}
-	ctx = context.WithValue(ctx, "session_payload", payload)
 
 	// 4. Call list_stores
 	// We pass "database" arg explicitly or rely on session payload?
@@ -169,7 +163,7 @@ func TestToolListStores_FiltersRequestedStores(t *testing.T) {
 	dbName := "test_db_schema_filter"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -202,7 +196,6 @@ func TestToolListStores_FiltersRequestedStores(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: dbName})
 	res, err := agent.toolListStores(ctx, map[string]any{"database": dbName, "stores": []any{"orders"}})
 	if err != nil {
 		t.Fatalf("toolListStores failed: %v", err)
@@ -234,7 +227,7 @@ func TestToolListStores_FuzzyMatchesRequestedStores(t *testing.T) {
 	dbName := "test_db_schema_fuzzy_filter"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -267,7 +260,8 @@ func TestToolListStores_FuzzyMatchesRequestedStores(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: dbName, CurrentUserQuery: "Find order totals"})
+	payloadContext := ai.GetSessionPayload(ctx)
+	payloadContext.CurrentUserQuery = "Find order totals"
 	res, err := agent.toolListStores(ctx, map[string]any{"database": dbName, "stores": []any{"order"}})
 	if err != nil {
 		t.Fatalf("toolListStores failed: %v", err)
@@ -292,7 +286,7 @@ func TestToolListStores_InfersLikelyStoresFromUserQuery(t *testing.T) {
 	dbName := "test_db_schema_query_filter"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -323,7 +317,8 @@ func TestToolListStores_InfersLikelyStoresFromUserQuery(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: dbName, CurrentUserQuery: "Find orders for users named John"})
+	payloadContext := ai.GetSessionPayload(ctx)
+	payloadContext.CurrentUserQuery = "Find orders for users named John"
 	res, err := agent.toolListStores(ctx, map[string]any{"database": dbName})
 	if err != nil {
 		t.Fatalf("toolListStores failed: %v", err)
@@ -355,7 +350,7 @@ func TestToolListStores_ReturnsProgressEnvelopeForNativeHints(t *testing.T) {
 	dbName := "test_db_schema_native_hint"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -378,7 +373,6 @@ func TestToolListStores_ReturnsProgressEnvelopeForNativeHints(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: dbName})
 	ctx = context.WithValue(ctx, ai.CtxKeyNativeToolHints, true)
 
 	res, err := agent.toolListStores(ctx, map[string]any{"database": dbName})
@@ -443,7 +437,7 @@ func TestToolListStores_StructKeySchema(t *testing.T) {
 	dbName := "test_db_struct_key_schema"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -477,7 +471,6 @@ func TestToolListStores_StructKeySchema(t *testing.T) {
 	}
 
 	// Query schema via list_stores tool
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: dbName})
 	res, err := agent.toolListStores(ctx, map[string]any{"database": dbName})
 	if err != nil {
 		t.Fatalf("toolListStores failed: %v", err)

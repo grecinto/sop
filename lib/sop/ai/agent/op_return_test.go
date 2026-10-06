@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 // TestOpReturn validates the behavior of the "return" opcode.
@@ -16,7 +18,7 @@ import (
 // If this logic regresses, the API will start returning literal strings like "@my_var"
 // instead of the data payload, breaking all downstream UI/AI consumers.
 func TestOpReturn_VariableResolution(t *testing.T) {
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{Variables: map[string]any{}})
 	agent := &CopilotAgent{}
 
 	tests := []struct {
@@ -87,7 +89,7 @@ func TestOpReturn_VariableResolution(t *testing.T) {
 }
 
 func TestOpReturn_LiteralValue(t *testing.T) {
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{Variables: map[string]any{}})
 	agent := &CopilotAgent{}
 
 	script := []map[string]any{

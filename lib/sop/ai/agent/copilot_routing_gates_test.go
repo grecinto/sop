@@ -187,8 +187,8 @@ func TestEvaluateAskRoutingGates_ClassifiesSummaryQueriesAsDiscovery(t *testing.
 	if taskCtx.RoutingGate != RoutingGateDiscovery {
 		t.Fatalf("expected discovery gate for V2 classification, got %q", taskCtx.RoutingGate)
 	}
-	if taskCtx.Domain != "general" {
-		t.Fatalf("expected V2 classification to carry the general domain, got %q", taskCtx.Domain)
+	if taskCtx.Domain != "coding_workflow" {
+		t.Fatalf("expected repository package summary to route through coding_workflow, got %q", taskCtx.Domain)
 	}
 	if taskCtx.CapabilityHint != "investigation" {
 		t.Fatalf("expected V2 classification phase to become the capability hint, got %q", taskCtx.CapabilityHint)
@@ -210,7 +210,7 @@ func TestTryAskColdStartRouting_UsesClassificationResponse(t *testing.T) {
 			query:         "fix the parser bug in the repository",
 			response:      `{"domains":["coding_workflow"],"phase":"execution","phase_plan":["investigation","execution"],"intent":"generate_code","confidence":"high","reasoning":"code change"}`,
 			wantDomain:    "coding_workflow",
-			wantHint:      "execution",
+			wantHint:      "investigation",
 			wantIntent:    "generate_code",
 			wantPhasePlan: 2,
 		},

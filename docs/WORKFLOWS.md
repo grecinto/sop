@@ -66,6 +66,16 @@ The workflow stack has evolved to a **pure participant pattern** where capabilit
 - **100% Pipeline Reuse**: Every workflow step executes through the full Ask pipeline with provider reasoning
 - **OnFinish Hook Pattern**: Post-execution hooks enable workflow setup without bypassing the pipeline
 
+### Coding Workspace Scope Belongs to Ask
+
+Ask owns the repository/folder scope for a coding objective. It should use an explicit path from the user's request or a reliable active workspace from that objective. If the target is missing or ambiguous, Ask asks the user and pauses before repository investigation, testing, or edits. The selected daemon-visible root is carried into delegated coding tasks and persisted with the active WorkStream.
+
+If the user changes repositories or narrows the work to a folder, Ask updates the active scope before continuing. A repository change must isolate worker context from the previous repository; a folder change constrains subsequent work to that requested scope. Clarify ambiguous changes before mutation. `/workspace` (alias `/repo`) reports the active scope, or that none is set. Keep the configured coding backend invisible in the user workflow: the user talks to Ask, and Ask decides whether to delegate.
+
+### Coding Executor Registration
+
+Ask's phase planner is the shared thought engine and outer orchestrator; it does not own a particular coding executor. The daemon selects one coding implementation at runtime: `cline` registers the Cline-backed worker Capability, `continue` selects the retained Continue compatibility worker, and `native` selects the in-house coding implementation. The shared Capability registry contains the selected worker only for Cline/Continue modes; phase Capabilities are never stored there and are created per Ask turn by the Phase Factory. The selected mode determines whether Ask uses native coding phase proxies or delegates to the worker. The selected worker backend is part of Copilot configuration and must survive the shared Service's per-session clone.
+
 ### Two Workflow Approaches (Both Participant Pattern)
 
 #### 1. Phase Capabilities (Comprehensive Workflow API)

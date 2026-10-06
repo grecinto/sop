@@ -35,7 +35,8 @@ func TestStartupRehydrationFlow(t *testing.T) {
 		Label:       "Test Script Creation",
 		StreamState: WorkStreamPaused,
 		StreamContext: &WorkStreamContext{
-			CurrentPhase: "execution",
+			CurrentPhase:  "execution",
+			WorkspaceRoot: "/workspace/repo",
 			StructuredPlan: &cw.StructuredPlan{
 				Objective:     "Create hello world test script",
 				WorkflowShape: "create",
@@ -127,6 +128,9 @@ func TestStartupRehydrationFlow(t *testing.T) {
 	// Verify phase progression was restored
 	if rehydratedThread.StreamContext == nil {
 		t.Fatal("StreamContext not restored")
+	}
+	if got := rehydratedThread.StreamContext.WorkspaceRoot; got != "/workspace/repo" {
+		t.Fatalf("workspace root was not restored after restart: got %q", got)
 	}
 	if len(rehydratedThread.StreamContext.PhaseHistory) != 3 {
 		t.Errorf("Expected 3 phases in history, got %d", len(rehydratedThread.StreamContext.PhaseHistory))

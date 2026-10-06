@@ -707,8 +707,8 @@ func TestPlanningPhaseCapability_UsesPlannerPackage(t *testing.T) {
 	if cap == nil {
 		t.Fatal("expected planning phase capability")
 	}
-	if cap.ID() != "phase_planning" {
-		t.Fatalf("expected phase_planning id, got %q", cap.ID())
+	if cap.ID() != "phase_coding_workflow_planning" {
+		t.Fatalf("expected phase_coding_workflow_planning id, got %q", cap.ID())
 	}
 }
 
@@ -995,7 +995,7 @@ func TestNewTestingPhaseCapability_ExposesTestingPhase(t *testing.T) {
 	if cap == nil {
 		t.Fatal("expected testing phase capability")
 	}
-	if cap.ID() != "phase_testing" {
-		t.Fatalf("expected phase_testing id, got %q", cap.ID())
+	if cap.ID() != "phase_coding_workflow_testing" {
+		t.Fatalf("expected phase_coding_workflow_testing id, got %q", cap.ID())
 	}
 }

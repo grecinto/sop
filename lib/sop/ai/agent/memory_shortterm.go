@@ -259,6 +259,7 @@ func (wi *WorkInventory) MarkItemCompleted(itemID string) bool {
 // WorkStreamContext captures the phase progression and artifacts
 type WorkStreamContext struct {
 	CurrentPhase   string                    `json:"current_phase"` // Current executing phase
+	WorkspaceRoot  string                    `json:"workspace_root,omitempty"`
 	PhaseHistory   []string                  `json:"phase_history"` // All phases executed: [intake, investigation, planning, ...]
 	PhasePlan      *PhasePlan                `json:"phase_plan"`    // THE PLAN - persisted across pause/resume
 	StructuredPlan *cw.StructuredPlan        `json:"structured_plan,omitempty"`

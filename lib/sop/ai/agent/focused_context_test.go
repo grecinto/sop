@@ -15,7 +15,7 @@ import (
 )
 
 func TestBuildSystemPrompt_IncludesFocusedStoreContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	dbDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{dbDir}}
 	appDB := database.NewDatabase(dbOpts)
@@ -90,7 +90,7 @@ func TestBuildSystemPrompt_IncludesFocusedStoreContext(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_StoresFocusedContext_StaysWithinBudgetGuardrail(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	dbDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{dbDir}}
 	appDB := database.NewDatabase(dbOpts)
@@ -193,7 +193,7 @@ func TestAutomationPolicyResolvesRegisteredFamilies(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -213,7 +213,7 @@ func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -234,7 +234,7 @@ func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_CodingWorkflowUsesPhaseWording(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -258,7 +258,7 @@ func TestBuildSystemPrompt_CodingWorkflowUsesPhaseWording(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_CodingWorkflowFixFailingTestsRequiresPlanFirst(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
@@ -296,7 +296,7 @@ func TestBuildSystemPrompt_CodingWorkflowFixFailingTestsRequiresPlanFirst(t *tes
 }
 
 func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
@@ -332,8 +332,8 @@ func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *t
 	if !strings.Contains(prompt, "Execution contract: use the active execution brief") {
 		t.Fatalf("expected authored plan prompt to use execution contract, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "on a broad suite failure, isolate the failing package or test from the output") {
-		t.Fatalf("expected authored plan prompt to require broad-to-targeted test isolation, got: %s", prompt)
+	if !strings.Contains(prompt, "targeted parser tests pass") {
+		t.Fatalf("expected authored plan prompt to retain its targeted validation step, got: %s", prompt)
 	}
 	if !strings.Contains(prompt, "Focus files: lib/parser.go") {
 		t.Fatalf("expected authored plan prompt to include context instructions from files, got: %s", prompt)
@@ -344,7 +344,7 @@ func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *t
 }
 
 func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -361,7 +361,7 @@ func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing
 }
 
 func TestBuildFocusedToolContext_CodingWorkflowUsesCanonicalPhaseContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -411,7 +411,7 @@ func (c *focusedContextGuidanceCapability) BuildGuidanceProfile(query string, st
 }
 
 func TestBuildSystemPrompt_PrioritizesCompactTaskGuidanceSynthesis(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -448,7 +448,7 @@ func TestBuildSystemPrompt_PrioritizesCompactTaskGuidanceSynthesis(t *testing.T)
 }
 
 func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -468,7 +468,7 @@ func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_DoesNotAddAutomationGuidanceWithoutRelevantFamilies(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
@@ -508,12 +508,12 @@ func TestBuildSystemPrompt_IncludesCrossDomainFocusedContext(t *testing.T) {
 	SetStoresFeatureEnabled(true)
 	defer SetStoresFeatureEnabled(false)
 
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
 
-	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload := &ai.SessionPayload{CurrentDB: "system", Variables: make(map[string]any)}
 	ctx = context.WithValue(ctx, "session_payload", payload)
 
 	prompt := ag.buildSystemPrompt(ctx, "Search release notes and inspect users", TaskContextClassification{
@@ -577,7 +577,7 @@ func TestBuildSystemPrompt_StoresFocusedContext_IncludesStructuredPlanSummary(t 
 	SetStoresFeatureEnabled(true)
 	defer SetStoresFeatureEnabled(false)
 
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
@@ -618,7 +618,7 @@ func TestBuildSystemPrompt_StoresFocusedContext_IncludesStructuredPlanSummary(t 
 }
 
 func TestBuildSystemPrompt_SpacesFocusedContext_IncludesStructuredPlanSummary(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
@@ -662,7 +662,7 @@ func TestBuildSystemPrompt_IncludesScriptAuthoringContextForStores(t *testing.T)
 	SetStoresFeatureEnabled(true)
 	defer SetStoresFeatureEnabled(false)
 
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
@@ -716,7 +716,7 @@ func TestBuildSystemPrompt_IncludesScriptAuthoringContextForStores(t *testing.T)
 }
 
 func TestBuildSystemPrompt_DedupesFocusedToolSectionsAgainstSystemToolsBaseline(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
@@ -757,7 +757,7 @@ func TestBuildSystemPrompt_DedupesFocusedToolSectionsAgainstSystemToolsBaseline(
 }
 
 func TestBuildSystemPrompt_StoresSystemTools_PrefersCompactProtocolSlice(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}

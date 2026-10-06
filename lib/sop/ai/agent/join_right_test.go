@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/database"
 	sopdb "github.com/sharedcode/sop/database"
 	"github.com/sharedcode/sop/jsondb"
@@ -14,7 +15,7 @@ import (
 
 func TestJoinRightBehavior(t *testing.T) {
 	// 1. Setup
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "testdb", Variables: map[string]any{}})
 	dbPath := "test_join_right"
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)

@@ -178,10 +178,13 @@ func TestCompatibleReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
 	agent.StoreOpener = func(ctx context.Context, dbOpts sop.DatabaseOptions, storeName string, tx sop.Transaction) (jsondb.StoreAccessor, error) {
 		return jsondb.OpenStore(ctx, dbOpts, storeName, tx)
 	}
+	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{CurrentDB: "dev_db", Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	query := "Find orders for users with first_name 'John' with total amount > 500"
-	runCtx := context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "dev_db", CurrentUserQuery: query})
+	payload := ai.GetSessionPayload(ctx)
+	payload.CurrentUserQuery = query
+	runCtx := ctx
 	runCtx = context.WithValue(runCtx, RunnerSessionKey, &RunnerSession{Verbose: true})
 	engine := &CompatibleReActEngine{}
 	gen := &johnOrdersOver500Generator{}

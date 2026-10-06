@@ -4064,6 +4064,38 @@ func TestAutoProvisionSharedCopilotServiceUsesBackendLoadedAgents(t *testing.T) 
 	}
 }
 
+func TestInjectIDEWorkerBackendUnwrapsSharedAgentService(t *testing.T) {
+	copilotAgent := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, nil)
+	service := sharedagent.NewService(nil, nil, nil, nil, nil, map[string]ai.Agent[map[string]any]{
+		"copilot": copilotAgent,
+	}, false)
+
+	injectIDEWorkerBackend(service, newClineIDEWorkerBackend(nil))
+	clonedService, ok := service.Clone().(*sharedagent.Service)
+	if !ok {
+		t.Fatal("expected cloned shared service")
+	}
+	clonedCopilotAgent, ok := clonedService.RegisteredAgent("copilot").(*sharedagent.CopilotAgent)
+	if !ok {
+		t.Fatalf("expected cloned CopilotAgent, got %T", clonedService.RegisteredAgent("copilot"))
+	}
+
+	tools, err := clonedCopilotAgent.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	toolNames := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		toolNames[tool.Name] = true
+	}
+	if !toolNames["delegate_continue_task"] {
+		t.Fatalf("expected wrapped copilot to expose Cline delegation, got %v", toolNames)
+	}
+	if toolNames["execution_run_tests"] {
+		t.Fatalf("expected wrapped copilot to hide native coding tools, got %v", toolNames)
+	}
+}
+
 func TestExecuteHandlerRunsShellCommand(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(`{"command":"printf 'hello from daemon'"}`))
 	rr := httptest.NewRecorder()

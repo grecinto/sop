@@ -103,8 +103,8 @@ func TestSanitizeScript(t *testing.T) {
 				{Op: "begin_tx", Args: map[string]interface{}{"database": "dev_db", "mode": "read"}, ResultVar: "tx"},
 				{Op: "open_store", Args: map[string]interface{}{"name": "orders", "transaction": "tx"}, ResultVar: "orders_store"},
 				{Op: "open_store", Args: map[string]interface{}{"name": "users_orders", "transaction": "tx"}, ResultVar: "users_orders"},
-				{Op: "join", Args: map[string]interface{}{"store": "users_orders", "type": "inner", "on": map[string]any{"key": "key"}}, InputVar: "users_rows", ResultVar: "joined_rows__bridge"},
-				{Op: "join", Args: map[string]interface{}{"store": "orders_store", "type": "inner", "on": map[string]any{"value": "key"}}, InputVar: "joined_rows__bridge", ResultVar: "joined_rows"},
+				{Op: "join", Args: map[string]interface{}{"store": "users_orders", "right_alias": "users_orders", "type": "inner", "on": map[string]any{"key": "key"}}, InputVar: "users_rows", ResultVar: "joined_rows__bridge"},
+				{Op: "join", Args: map[string]interface{}{"store": "orders_store", "right_alias": "orders", "type": "inner", "on": map[string]any{"value": "key"}}, InputVar: "joined_rows__bridge", ResultVar: "joined_rows"},
 			},
 		},
 	}

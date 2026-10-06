@@ -34,6 +34,10 @@ type retryMetaAskMockGen struct {
 	CapturedPrompt string
 }
 
+func systemPromptTestContext() context.Context {
+	return context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}})
+}
+
 func (m *retryMetaAskMockGen) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
 	m.CapturedPrompt = prompt
 	return ai.GenOutput{Text: "Retried previous ask."}, nil
@@ -48,7 +52,8 @@ func (m *retryMetaAskMockGen) PrewarmCache(ctx context.Context, opts ai.GenOptio
 
 func TestBuildSystemPrompt_DoesNotRequireExplicitParametersGuardrailText(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	prompt := ag.buildSystemPrompt(context.Background(), "Inspect the repo", TaskContextClassification{})
+	ctx := systemPromptTestContext()
+	prompt := ag.buildSystemPrompt(ctx, "Inspect the repo", TaskContextClassification{})
 
 	if strings.Contains(prompt, "Explicit Parameters Guardrail") {
 		t.Fatalf("did not expect buildSystemPrompt to include explicit parameters guardrail text, got: %s", prompt)
@@ -67,7 +72,7 @@ func TestBuildSystemPrompt_UsesMultipleRelevantCapabilities(t *testing.T) {
 	ag.capabilityRegistry.Register(first)
 	ag.capabilityRegistry.Register(second)
 
-	ctx := context.WithValue(context.Background(), ctxKeySelectedCapability, first)
+	ctx := context.WithValue(systemPromptTestContext(), ctxKeySelectedCapability, first)
 	prompt := ag.buildSystemPrompt(ctx, "inspect the repo and explain the workflow", TaskContextClassification{Domain: "Desktop", RoutingGate: RoutingGateDiscovery})
 
 	if !strings.Contains(prompt, "First capability context") {
@@ -723,7 +728,7 @@ func TestCopilotPipeline_StoresSchemaFallback_NoArtifacts(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_AppliesBudgetWithoutBreakingMemoryFlow(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}
 	sysDB := database.NewDatabase(sysDBOptions)
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
@@ -800,7 +805,7 @@ func TestPromptBudgetProfile_UsesRoutingGate(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_UsesLeanAssemblyForGroundedStoresAsk(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
@@ -873,7 +878,9 @@ func TestBuildSystemPrompt_IncludesCoreSOPPlaybooksWhenNoKBIsSelected(t *testing
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
 	ag.markMRUCategoryWithSource(playbookMRUCategory("sop"), "Retrieved Semantics:\n- Context (Score: 1.00): SOP playbook context", MRUSourcePlaybook)
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{
+		CurrentDB:   "system",
 		SelectedKBs: nil,
+		Variables:   map[string]any{},
 	})
 
 	prompt := ag.buildSystemPrompt(ctx, "Explain SOP architecture", TaskContextClassification{
@@ -1166,7 +1173,7 @@ func TestPromptBudgetProfile_UsesLeanStoresAssembly(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_IncludesWorkflowRecipesComponent(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
@@ -1208,7 +1215,7 @@ func TestBuildSystemPrompt_IncludesWorkflowRecipesComponent(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_IncludesClarificationQuestionStyleGuidance(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemPromptTestContext()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
@@ -1247,7 +1254,7 @@ func TestBuildSystemPrompt_RehydratesSystemToolsFromSTMProjection(t *testing.T) 
 		Source:   MRUSourceSystemTools,
 	}})
 
-	prompt := ag.buildSystemPrompt(context.Background(), "List stores", TaskContextClassification{})
+	prompt := ag.buildSystemPrompt(systemPromptTestContext(), "List stores", TaskContextClassification{})
 	if !strings.Contains(prompt, "STM_REHYDRATED_TOOLS") {
 		t.Fatalf("expected buildSystemPrompt to rehydrate system tools from STM projection, got %s", prompt)
 	}
@@ -1265,7 +1272,7 @@ func TestBuildSystemPrompt_RehydratesAskOutcomeFromSTMProjection(t *testing.T) {
 		{Category: askOutcomeMRUCategoryGuidance, Context: "- Reuse confirmed facts and successful patterns from this outcome before broadening scope.", Source: MRUSourceAskOutcome, Scope: MRUScopeSession},
 	})
 
-	prompt := ag.buildSystemPrompt(context.Background(), "Find orders for those users", TaskContextClassification{})
+	prompt := ag.buildSystemPrompt(systemPromptTestContext(), "Find orders for those users", TaskContextClassification{})
 	if !strings.Contains(prompt, "Recent Ask Outcome:") || !strings.Contains(prompt, "Find users named John") || !strings.Contains(prompt, "list_stores confirmed users schema=key:string, first_name:string") || !strings.Contains(prompt, "list_stores confirmed users relations=[users_orders(key-") {
 		t.Fatalf("expected buildSystemPrompt to rehydrate ask outcome from STM projection, got %s", prompt)
 	}
@@ -1282,7 +1289,7 @@ func TestBuildSystemPrompt_IgnoresStaleAskProgressWhenRehydratingFromSTM(t *test
 		{Category: askOutcomeMRUCategoryResult, Context: "- Last outcome: Found matching users", Source: MRUSourceAskOutcome, Scope: MRUScopeSession},
 	})
 
-	prompt := ag.buildSystemPrompt(context.Background(), "Find orders for those users", TaskContextClassification{})
+	prompt := ag.buildSystemPrompt(systemPromptTestContext(), "Find orders for those users", TaskContextClassification{})
 	if strings.Contains(prompt, "stale provisional summary") || strings.Contains(prompt, "In-Flight Ask Progress:") {
 		t.Fatalf("expected buildSystemPrompt to ignore stale ask-progress MRU from STM, got %s", prompt)
 	}
@@ -1307,7 +1314,7 @@ func TestBuildSystemPrompt_RehydratesImplicitRecipesFromSTM(t *testing.T) {
 		Source:     "inner_loop_success",
 	}})
 
-	prompt := ag.buildSystemPrompt(context.Background(), "Find users named John", TaskContextClassification{Domain: StoresDomain})
+	prompt := ag.buildSystemPrompt(systemPromptTestContext(), "Find users named John", TaskContextClassification{Domain: StoresDomain})
 	if !strings.Contains(prompt, "workflow_recipes") || !strings.Contains(prompt, "Research grounded schema before execute_script retry") || !strings.Contains(prompt, "Retry execute_script with corrected grounded arguments") {
 		t.Fatalf("expected buildSystemPrompt to include implicit recipe snapshot, got %s", prompt)
 	}
@@ -1331,7 +1338,7 @@ func TestBuildSystemPrompt_AddsMemoryContinuationFallbackForContinuityRouting(t 
 		LastAssistantSummary: "Found John Jones.",
 	})
 
-	prompt := ag.buildSystemPrompt(context.Background(), "Find orders for those users", TaskContextClassification{RoutingGate: RoutingGateContinuity, Domain: StoresDomain})
+	prompt := ag.buildSystemPrompt(systemPromptTestContext(), "Find orders for those users", TaskContextClassification{RoutingGate: RoutingGateContinuity, Domain: StoresDomain})
 	if !strings.Contains(prompt, "Memory Continuity Fallback") || !strings.Contains(prompt, "Find users named John") || !strings.Contains(prompt, "Found John Jones") {
 		t.Fatalf("expected continuity prompt to include memory fallback summary, got %s", prompt)
 	}
@@ -1446,13 +1453,14 @@ func TestEpilogueAndCleanup_FinalAskOutcomeWinsOverAskProgress(t *testing.T) {
 	ag.brain = nil
 	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
 	ag.service.session.Memory = NewShortTermMemory()
+	ctx := systemPromptTestContext()
 	ag.persistAskProgressMRU(ai.MemoryHydrationUpdate{
 		FinalText:    "Still researching",
 		ToolCalls:    []ai.ToolCall{{Name: "list_stores"}},
 		OutcomeFacts: []string{"list_stores confirmed users schema=id,first_name"},
 	})
 
-	ag.epilogueAndCleanup(context.Background(), "Find John", ai.IntentOmni, "Found John Jones.", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: [{\"first_name\":\"John Jones\"}]"}, nil, nil, nil)
+	ag.epilogueAndCleanup(ctx, "Find John", ai.IntentOmni, "Found John Jones.", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: [{\"first_name\":\"John Jones\"}]"}, nil, nil, nil)
 
 	snapshot := ag.getMRUSnapshot()
 	for _, item := range snapshot {
@@ -1556,9 +1564,10 @@ func TestEpilogueAndCleanup_PersistsMRUSnapshotWithoutSleepCycleLogging(t *testi
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.brain = nil
 	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
+	ctx := systemPromptTestContext()
 	ag.markMRUCategoryWithSource(SYSTEM_TOOLS, "TOOLS_FOR_RESTART", MRUSourceSystemTools)
 
-	ag.epilogueAndCleanup(context.Background(), "List stores", "Omni", "Done", []ai.ToolCall{{Name: "list_stores"}, {Name: "execute_script"}}, []string{"list_stores confirmed users schema=key:string, first_name:string", "list_stores confirmed users relations=[users_orders(key->users.key)]"}, []ai.LearnedRecipe{{
+	ag.epilogueAndCleanup(ctx, "List stores", "Omni", "Done", []ai.ToolCall{{Name: "list_stores"}, {Name: "execute_script"}}, []string{"list_stores confirmed users schema=key:string, first_name:string", "list_stores confirmed users relations=[users_orders(key->users.key)]"}, []ai.LearnedRecipe{{
 		ID:         "implicit.execute_script.research_then_retry",
 		Kind:       RecipeKindImplicit,
 		Scope:      RecipeScopeMicro,
@@ -1618,6 +1627,7 @@ func TestEpilogueAndCleanup_PersistsMRUSnapshotWithoutSleepCycleLogging(t *testi
 func TestEpilogueAndCleanup_MergesRecipeSnapshotsAcrossAsks(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
+	ctx := systemPromptTestContext()
 	ag.service.session.Memory.SetRecipeSnapshot([]RecipeItem{{
 		ID:         "implicit.execute_script.research_then_retry",
 		Kind:       RecipeKindImplicit,
@@ -1631,7 +1641,7 @@ func TestEpilogueAndCleanup_MergesRecipeSnapshotsAcrossAsks(t *testing.T) {
 		Source:     "inner_loop_success",
 	}})
 
-	ag.epilogueAndCleanup(context.Background(), "Find orders", "Omni", "Done", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: []"}, []ai.LearnedRecipe{{
+	ag.epilogueAndCleanup(ctx, "Find orders", "Omni", "Done", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: []"}, []ai.LearnedRecipe{{
 		ID:         "implicit.execute_script.repair_in_place",
 		Kind:       RecipeKindImplicit,
 		Scope:      RecipeScopeMicro,

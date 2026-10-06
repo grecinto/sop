@@ -23,7 +23,7 @@ func TestToolFetch_ReturnsTerminalEnvelopeForMissingKeyInNativeLoop(t *testing.T
 	dbName := "test_db_fetch_terminal_hint"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -72,7 +72,7 @@ func TestToolUpdate_ReturnsTerminalEnvelopeForMissingItemInNativeLoop(t *testing
 	dbName := "test_db_update_terminal_hint"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)
@@ -121,7 +121,7 @@ func TestToolDelete_ReturnsTerminalEnvelopeForMissingItemInNativeLoop(t *testing
 	dbName := "test_db_delete_terminal_hint"
 	opts := sop.DatabaseOptions{StoresFolders: []string{tmpDir}}
 	agent := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{dbName: opts}, nil)
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: dbName, Variables: map[string]any{}})
 	agent.Open(ctx)
 
 	db := database.NewDatabase(opts)

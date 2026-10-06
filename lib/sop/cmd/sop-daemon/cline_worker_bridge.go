@@ -107,6 +107,10 @@ func (b *clineWorkerBackend) OwnsCodingWorkflow() bool {
 	return true
 }
 
+func (b *clineWorkerBackend) CodingCapabilityName() string {
+	return "Cline Coding"
+}
+
 func (b *clineWorkerBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	_ = ctx
 	state := ideworker.SessionState{SessionID: strings.TrimSpace(sessionID), IDE: "cline"}

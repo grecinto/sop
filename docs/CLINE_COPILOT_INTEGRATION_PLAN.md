@@ -18,6 +18,8 @@ Select the coding executor with `workflow_backend` in daemon configuration:
 
 `daemon`, `daemon_shell`, and `shell` remain aliases for `native` for compatibility. The in-house phase implementation remains available for explicit native selection, not as an automatic fallback from Cline.
 
+Coding implementation selection is registration-driven. Ask's phase planner remains the shared orchestrator. In Cline mode, the Capability registry contains the Cline-backed worker Capability; in Continue compatibility mode it contains the Continue-backed worker Capability; in native mode neither delegated worker is registered. Phase Capabilities are never stored globally: the Phase Factory creates the selected domain/phase implementation for each Ask turn, using native coding phases only when `workflow_backend=native`. The selected worker backend configuration must survive CopilotAgent cloning inside the shared Service.
+
 ```mermaid
 flowchart TD
     ASK[AI Studio Send / Northstar AI Ask] --> SELECT{workflow_backend}
@@ -66,6 +68,27 @@ When `workflow_backend=cline`, Cline exclusively owns repository coding executio
 The legacy `/api/continue/*` bridge routes are mounted only when `workflow_backend=continue`. In Cline mode, Continue is not selected as a backend and its compatibility routes are not registered.
 
 The React site is the account/onboarding surface. The Data Manager Chat UI is served by `httpserver` or the daemon from shared `sopbackend` templates. Direct Cline HTTP routes are for diagnostics and backend tests, not a second production chat controller or Send button.
+
+### Ask-Owned Coding Workspace Intake
+
+Ask owns the coding workspace context before it delegates. It uses a path explicitly supplied in the current request or a reliable workspace already established for the active session. If no unambiguous workspace is available, Ask asks the user which repository or folder to work in, records the answer in the active session, and pauses until the user responds. Ask then sends the resolved root on every delegated coding task. It does not expose a Cline button, ask the user to configure Cline, or let the worker choose the top-level project implicitly.
+
+During a coding objective, the user may explicitly switch repositories or narrow the scope to a folder. Ask updates the active root before further delegated work. The Cline host scopes tactical sessions by workstream, workspace, and provider configuration, so switching repositories isolates agent history; a folder-level scope change is also passed explicitly to the next delegated task. An ambiguous switch must be clarified before edits. The path must be available to the daemon host.
+
+```mermaid
+flowchart TD
+    USER[User starts or continues a coding ask] --> ASK[Northstar AI Ask resolves coding scope]
+    ASK --> KNOWN{Workspace explicit or reliably established?}
+    KNOWN -->|no or ambiguous| CLARIFY[Ask user which repo or folder; pause]
+    CLARIFY --> ANSWER[User answers in the same Ask conversation]
+    ANSWER --> ROOT[Set active workspace root]
+    KNOWN -->|yes| ROOT
+    ROOT --> DELEGATE[Ask delegates bounded task to configured backend]
+    DELEGATE --> RESULT[Ask presents result and continues objective]
+    RESULT --> SWITCH{User changes repo or folder?}
+    SWITCH -->|yes| ASK
+    SWITCH -->|no| RESULT
+```
 
 ## Implemented Components
 

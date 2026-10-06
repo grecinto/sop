@@ -461,6 +461,30 @@ func (r *Registry) Register(cap Capability) {
 	}
 }
 
+// Unregister removes a capability and any command prefixes it registered.
+func (r *Registry) Unregister(capabilityID string) bool {
+	if r == nil || strings.TrimSpace(capabilityID) == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index, cap := range r.capabilities {
+		if cap == nil || cap.ID() != capabilityID {
+			continue
+		}
+		if prefixHandler, ok := cap.(PrefixHandler); ok {
+			for _, prefix := range prefixHandler.GetHandledPrefixes() {
+				if registered := r.prefixHandlers[prefix]; registered != nil && registered.ID() == capabilityID {
+					delete(r.prefixHandlers, prefix)
+				}
+			}
+		}
+		r.capabilities = append(r.capabilities[:index], r.capabilities[index+1:]...)
+		return true
+	}
+	return false
+}
+
 // RegisterAtFront inserts a capability ahead of existing registrations without duplicating it.
 func (r *Registry) RegisterAtFront(cap Capability) {
 	if cap == nil {
