@@ -2624,7 +2624,7 @@ func repoPathFromContext(ctx context.Context, args map[string]any) string {
 
 func normalizeRepoHint(path string) string {
 	switch strings.ToLower(strings.TrimSpace(path)) {
-	case "", ".", "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
+	case "", ".", "current", "here", "pwd", "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
 		return "."
 	default:
 		return strings.TrimSpace(path)

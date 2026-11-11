@@ -153,6 +153,9 @@ func (m *clineSDKHostManager) Run(ctx context.Context, hostPath string, req idew
 	if m == nil {
 		return "", fmt.Errorf("Cline SDK host manager is not initialized")
 	}
+	if abs, err := filepath.Abs(strings.TrimSpace(req.WorkspaceRoot)); err == nil && abs != "" {
+		req.WorkspaceRoot = abs
+	}
 	if err := validateClineWorkspaceRoot(req.WorkspaceRoot); err != nil {
 		return "", err
 	}

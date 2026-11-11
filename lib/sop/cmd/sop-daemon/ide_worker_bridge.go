@@ -139,6 +139,26 @@ func (b *continueIDEWorkerBackend) CodingCapabilityName() string {
 	return "Continue Compatibility"
 }
 
+func (b compositeIDEWorkerBackend) OwnsCodingWorkflow() bool {
+	for _, backend := range b.backends {
+		if owner, ok := backend.(ideworker.CodingWorkflowOwner); ok && owner.OwnsCodingWorkflow() {
+			return true
+		}
+	}
+	return false
+}
+
+func (b compositeIDEWorkerBackend) CodingCapabilityName() string {
+	for _, backend := range b.backends {
+		if namer, ok := backend.(interface{ CodingCapabilityName() string }); ok {
+			if name := strings.TrimSpace(namer.CodingCapabilityName()); name != "" {
+				return name
+			}
+		}
+	}
+	return "IDE Worker"
+}
+
 func (b compositeIDEWorkerBackend) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
 	state := ideworker.SessionState{SessionID: strings.TrimSpace(sessionID)}
 	var lastErr error
@@ -788,10 +808,26 @@ func injectIDEWorkerBackend(agentSvc ai.Agent[map[string]any], backend ideworker
 		return
 	}
 	if service, ok := agentSvc.(interface {
+		RegisteredAgents() map[string]ai.Agent[map[string]any]
+	}); ok {
+		injected := false
+		for _, ag := range service.RegisteredAgents() {
+			if copilotAgent, ok := ag.(*sharedagent.CopilotAgent); ok {
+				copilotAgent.InjectIDEWorkerBackend(backend)
+				injected = true
+			}
+		}
+		if injected {
+			return
+		}
+	}
+	if service, ok := agentSvc.(interface {
 		RegisteredAgent(string) ai.Agent[map[string]any]
 	}); ok {
-		if copilotAgent, ok := service.RegisteredAgent("copilot").(*sharedagent.CopilotAgent); ok {
-			copilotAgent.InjectIDEWorkerBackend(backend)
+		for _, id := range []string{"copilot", "sql_core"} {
+			if copilotAgent, ok := service.RegisteredAgent(id).(*sharedagent.CopilotAgent); ok {
+				copilotAgent.InjectIDEWorkerBackend(backend)
+			}
 		}
 	}
 }

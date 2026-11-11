@@ -82,6 +82,37 @@ func TestCopilotAgent_Ask_RepoAliasShowsCurrentCodingRoot(t *testing.T) {
 	}
 }
 
+func TestCopilotAgent_Ask_WorkspaceCommandSetsCodingRoot(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: NewRunnerSession()}
+	ag.service.session.Memory = NewShortTermMemory()
+
+	resp, err := ag.Ask(context.Background(), "/workspace /custom/project", nil)
+	if err != nil {
+		t.Fatalf("/workspace /custom/project failed: %v", err)
+	}
+	if resp != "Current coding workspace: /custom/project" {
+		t.Fatalf("unexpected response: %q", resp)
+	}
+
+	thread := ag.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil || thread.StreamContext.WorkspaceRoot != "/custom/project" {
+		t.Fatalf("expected stream context workspace root to be /custom/project, got %#v", thread)
+	}
+
+	// Test clear
+	resp, err = ag.Ask(context.Background(), "/workspace clear", nil)
+	if err != nil {
+		t.Fatalf("/workspace clear failed: %v", err)
+	}
+	if resp != "Current coding workspace: (none set)." {
+		t.Fatalf("unexpected response after clear: %q", resp)
+	}
+	if thread.StreamContext.WorkspaceRoot != "" {
+		t.Fatalf("expected cleared workspace root, got %q", thread.StreamContext.WorkspaceRoot)
+	}
+}
+
 func TestCopilotAgent_Ask_CommandPrefixExecutesLocalAutomationDirectly(t *testing.T) {
 	SetLocalDesktopAutomationEnabled(true)
 	defer SetLocalDesktopAutomationEnabled(false)

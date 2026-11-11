@@ -224,6 +224,9 @@ func (b *clineWorkerBackend) executeTask(ctx context.Context, req ideworker.Task
 	sessionLock := b.sessionLock(workstreamID)
 	sessionLock.Lock()
 	defer sessionLock.Unlock()
+	if abs, err := filepath.Abs(strings.TrimSpace(req.WorkspaceRoot)); err == nil && abs != "" {
+		req.WorkspaceRoot = abs
+	}
 	before := snapshotClineWorkspace(ctx, req.WorkspaceRoot)
 	var result ideworker.ExecutionResult
 	var err error

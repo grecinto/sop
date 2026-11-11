@@ -81,6 +81,10 @@ func ParseSlashCommand(input string) (string, map[string]any, error) {
 			if len(positional) > 0 {
 				args["name"] = positional[0] // infer "name" arg is the first positional
 			}
+		case "workspace", "repo":
+			if len(positional) > 0 {
+				args["path"] = positional[0]
+			}
 		case "run", "save_last_step":
 			if len(positional) > 0 {
 				args["script"] = positional[0] // infer "script" arg is the first positional

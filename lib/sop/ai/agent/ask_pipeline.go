@@ -587,17 +587,45 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 
 func (a *CopilotAgent) restoreCodingWorkspaceRoot(ctx context.Context) {
 	thread := a.currentConversationThread()
-	if thread == nil || thread.StreamContext == nil || strings.TrimSpace(thread.StreamContext.WorkspaceRoot) == "" {
+	if thread != nil && thread.StreamContext != nil && strings.TrimSpace(thread.StreamContext.WorkspaceRoot) != "" {
+		payload := ai.GetSessionPayload(ctx)
+		if payload == nil {
+			return
+		}
+		if payload.Variables == nil {
+			payload.Variables = make(map[string]any)
+		}
+		payload.Variables["workspace_root"] = thread.StreamContext.WorkspaceRoot
 		return
 	}
+
 	payload := ai.GetSessionPayload(ctx)
-	if payload == nil {
-		return
+	if payload != nil && payload.ClarificationState != nil && payload.ClarificationState.Status == "resolved" {
+		question := strings.ToLower(payload.ClarificationState.AssistantQuestion)
+		missingFact := strings.ToLower(payload.ClarificationState.MissingFact)
+		if strings.Contains(question, "repository") || strings.Contains(question, "folder") || strings.Contains(question, "working directory") || strings.Contains(question, "workspace") ||
+			strings.Contains(missingFact, "repository") || strings.Contains(missingFact, "folder") || strings.Contains(missingFact, "working directory") || strings.Contains(missingFact, "workspace") {
+			answer := strings.TrimSpace(payload.ClarificationState.UserClarification)
+			if answer != "" {
+				resolved := repoPathFromContext(ctx, map[string]any{"path": answer})
+				if resolved != "" && resolved != "." {
+					if payload.Variables == nil {
+						payload.Variables = make(map[string]any)
+					}
+					payload.Variables["workspace_root"] = resolved
+					if thread != nil {
+						if thread.StreamContext == nil {
+							thread.InitializeWorkStream("investigation")
+						}
+						if thread.StreamContext != nil {
+							thread.StreamContext.WorkspaceRoot = resolved
+						}
+					}
+					return
+				}
+			}
+		}
 	}
-	if payload.Variables == nil {
-		payload.Variables = make(map[string]any)
-	}
-	payload.Variables["workspace_root"] = thread.StreamContext.WorkspaceRoot
 }
 
 func (a *CopilotAgent) persistCodingWorkspaceRoot(ctx context.Context, phase string) {

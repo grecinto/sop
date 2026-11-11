@@ -61,9 +61,11 @@ func TestRepoPathFromContext_UsesWorkingDirForCurrentRepoAlias(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: map[string]any{"working_dir": repoRoot}})
 
-	resolved := repoPathFromContext(ctx, map[string]any{"path": "current repo"})
-	if resolved != repoRoot {
-		t.Fatalf("expected current repo alias to resolve to %q, got %q", repoRoot, resolved)
+	for _, alias := range []string{"current repo", "current", "here", "pwd", "workspace"} {
+		resolved := repoPathFromContext(ctx, map[string]any{"path": alias})
+		if resolved != repoRoot {
+			t.Fatalf("expected alias %q to resolve to %q, got %q", alias, repoRoot, resolved)
+		}
 	}
 }
 

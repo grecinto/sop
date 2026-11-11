@@ -120,10 +120,8 @@ func NormalizeWorkflowBackend(value string) string {
 		return "continue"
 	case "cline", "cline_cli":
 		return "cline"
-	case "native", "in_house", "in-house", "coding_workflow":
+	case "native", "in_house", "in-house", "coding_workflow", "daemon", "daemon_shell", "local_daemon", "shell":
 		return "native"
-	case "daemon", "daemon_shell", "local_daemon", "shell":
-		return "daemon"
 	default:
 		return "cline"
 	}

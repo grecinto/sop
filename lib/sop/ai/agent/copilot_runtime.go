@@ -1459,6 +1459,46 @@ func (a *CopilotAgent) handleSlashCommand(ctx context.Context, query string, gen
 	}
 
 	if err == nil && (toolName == "workspace" || toolName == "repo") {
+		newPath := ""
+		if v, ok := args["path"].(string); ok && strings.TrimSpace(v) != "" {
+			newPath = strings.TrimSpace(v)
+		} else if v, ok := args["workspace_root"].(string); ok && strings.TrimSpace(v) != "" {
+			newPath = strings.TrimSpace(v)
+		}
+		if newPath != "" {
+			if strings.EqualFold(newPath, "clear") || strings.EqualFold(newPath, "reset") || strings.EqualFold(newPath, "none") {
+				newPath = ""
+			}
+			thread := a.currentConversationThread()
+			if thread == nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil && newPath != "" {
+				thread = &ConversationThread{ID: sop.NewUUID(), StreamState: WorkStreamActive}
+				thread.InitializeWorkStream("investigation")
+				a.service.session.Memory.AddThread(thread)
+			}
+			if thread != nil {
+				if thread.StreamContext == nil && newPath != "" {
+					thread.InitializeWorkStream("investigation")
+				}
+				if thread.StreamContext != nil {
+					thread.StreamContext.WorkspaceRoot = newPath
+				}
+			}
+			payload := ai.GetSessionPayload(ctx)
+			if payload != nil {
+				if payload.Variables == nil {
+					payload.Variables = make(map[string]any)
+				}
+				if newPath == "" {
+					delete(payload.Variables, "workspace_root")
+				} else {
+					payload.Variables["workspace_root"] = newPath
+				}
+			}
+			if newPath == "" {
+				return true, "Current coding workspace: (none set).", nil
+			}
+			return true, "Current coding workspace: " + newPath, nil
+		}
 		thread := a.currentConversationThread()
 		if thread == nil || thread.StreamContext == nil || strings.TrimSpace(thread.StreamContext.WorkspaceRoot) == "" {
 			return true, "Current coding workspace: (none set).", nil

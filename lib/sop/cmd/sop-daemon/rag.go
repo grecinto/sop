@@ -684,6 +684,32 @@ func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
 	if copilotAgent, ok := agentSvc.(*agent.CopilotAgent); ok {
 		copilotAgent.InjectShellSessionManager(globalShellSessionManager)
 		log.Printf("daemon: injected shell session manager into CopilotAgent")
+		return
+	}
+	if service, ok := agentSvc.(interface {
+		RegisteredAgents() map[string]ai.Agent[map[string]any]
+	}); ok {
+		injected := false
+		for _, ag := range service.RegisteredAgents() {
+			if copilotAgent, ok := ag.(*agent.CopilotAgent); ok {
+				copilotAgent.InjectShellSessionManager(globalShellSessionManager)
+				log.Printf("daemon: injected shell session manager into CopilotAgent via RegisteredAgents")
+				injected = true
+			}
+		}
+		if injected {
+			return
+		}
+	}
+	if service, ok := agentSvc.(interface {
+		RegisteredAgent(string) ai.Agent[map[string]any]
+	}); ok {
+		for _, id := range []string{"copilot", "sql_core"} {
+			if copilotAgent, ok := service.RegisteredAgent(id).(*agent.CopilotAgent); ok {
+				copilotAgent.InjectShellSessionManager(globalShellSessionManager)
+				log.Printf("daemon: injected shell session manager into CopilotAgent (%s)", id)
+			}
+		}
 	}
 }
 
@@ -1057,10 +1083,21 @@ func (s *localRAGService) maybeStoreContinueTeamPractice(ctx context.Context, me
 func (s *localRAGService) continueTeamPracticeAgent() *agent.CopilotAgent {
 	if s != nil {
 		if provider, ok := s.service.(interface {
+			RegisteredAgents() map[string]ai.Agent[map[string]any]
+		}); ok {
+			for _, ag := range provider.RegisteredAgents() {
+				if copilotAgent, ok := ag.(*agent.CopilotAgent); ok {
+					return copilotAgent
+				}
+			}
+		}
+		if provider, ok := s.service.(interface {
 			RegisteredAgent(string) ai.Agent[map[string]any]
 		}); ok {
-			if copilotAgent, ok := provider.RegisteredAgent("copilot").(*agent.CopilotAgent); ok {
-				return copilotAgent
+			for _, id := range []string{"copilot", "sql_core"} {
+				if copilotAgent, ok := provider.RegisteredAgent(id).(*agent.CopilotAgent); ok {
+					return copilotAgent
+				}
 			}
 		}
 		if copilotAgent, ok := s.service.(*agent.CopilotAgent); ok {
@@ -1609,15 +1646,14 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		logVerbose("Using working directory for session %q: %s", sessionID, workspaceRoot)
 	}
 
+	daemonCwd, _ := os.Getwd()
+	if daemonCwd == "" {
+		daemonCwd = "."
+	}
+
 	// Ensure PTY session exists for this chat session
 	// This allows the user to navigate directories in the terminal, and we'll pick up their CWD
 	if (workspaceRoot == "" || workspaceRoot == ".") && sessionID != "" {
-		// Get daemon's CWD to spawn session there
-		daemonCwd, _ := os.Getwd()
-		if daemonCwd == "" {
-			daemonCwd = "."
-		}
-
 		// Ensure a PTY session exists with the chat session ID
 		log.Printf("[RAG] Ensuring PTY session %q exists at %s", sessionID, daemonCwd)
 		ensuredID, spawnErr := s.shellSessions.EnsureSession(sessionID, daemonCwd)
@@ -1640,8 +1676,10 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	if workspaceRoot != "" && workspaceRoot != "." {
 		payload.Variables["working_dir"] = workspaceRoot
-		payload.Variables["workspace_root"] = workspaceRoot
-		payload.ActiveRepo = workspaceRoot
+		if daemonCwd != "" && filepath.Clean(workspaceRoot) != filepath.Clean(daemonCwd) {
+			payload.Variables["workspace_root"] = workspaceRoot
+			payload.ActiveRepo = workspaceRoot
+		}
 		log.Printf("[RAG] ✓ Set SessionPayload working_dir=%s for session %s", workspaceRoot, sessionID)
 	} else {
 		log.Printf("[RAG] ✗ Could not determine working directory, workspaceRoot=%q sessionID=%q", workspaceRoot, sessionID)

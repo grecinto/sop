@@ -1992,6 +1992,12 @@ func TestDefaultIDEWorkerBackend_UsesConfiguredWorkflowBackend(t *testing.T) {
 		if sopbackend.NormalizeWorkflowBackend("in-house") != "native" {
 			t.Fatal("expected in-house alias to normalize to native coding workflow")
 		}
+		if sopbackend.NormalizeWorkflowBackend("daemon") != "native" {
+			t.Fatal("expected daemon alias to normalize to native coding workflow")
+		}
+		if sopbackend.NormalizeWorkflowBackend("shell") != "native" {
+			t.Fatal("expected shell alias to normalize to native coding workflow")
+		}
 	})
 
 	t.Run("continue explicitly owns coding workflow", func(t *testing.T) {
@@ -4093,6 +4099,68 @@ func TestInjectIDEWorkerBackendUnwrapsSharedAgentService(t *testing.T) {
 	}
 	if toolNames["execution_run_tests"] {
 		t.Fatalf("expected wrapped copilot to hide native coding tools, got %v", toolNames)
+	}
+}
+
+func TestInjectIDEWorkerBackendUnwrapsSharedAgentServiceWithSQLCore(t *testing.T) {
+	sqlCoreAgent := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, nil)
+	service := sharedagent.NewService(nil, nil, nil, nil, nil, map[string]ai.Agent[map[string]any]{
+		"sql_core": sqlCoreAgent,
+	}, false)
+
+	injectIDEWorkerBackend(service, newClineIDEWorkerBackend(nil))
+	clonedService, ok := service.Clone().(*sharedagent.Service)
+	if !ok {
+		t.Fatal("expected cloned shared service")
+	}
+	clonedCopilotAgent, ok := clonedService.RegisteredAgent("sql_core").(*sharedagent.CopilotAgent)
+	if !ok {
+		t.Fatalf("expected cloned CopilotAgent, got %T", clonedService.RegisteredAgent("sql_core"))
+	}
+
+	tools, err := clonedCopilotAgent.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	toolNames := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		toolNames[tool.Name] = true
+	}
+	if !toolNames["delegate_continue_task"] {
+		t.Fatalf("expected wrapped sql_core copilot to expose Cline delegation, got %v", toolNames)
+	}
+	if toolNames["execution_run_tests"] {
+		t.Fatalf("expected wrapped sql_core copilot to hide native coding tools, got %v", toolNames)
+	}
+}
+
+func TestHandleAskDoesNotPreseedWorkspaceRootWithDaemonCWD(t *testing.T) {
+	agent := &recordingAskAgent{response: "ok"}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"fix failing tests"}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload in context")
+	}
+	if wsRoot, ok := payload.Variables["workspace_root"].(string); ok && wsRoot != "" {
+		t.Fatalf("expected workspace_root to remain unset when not established, got %q", wsRoot)
+	}
+	if payload.ActiveRepo != "" {
+		t.Fatalf("expected ActiveRepo to remain empty when not established, got %q", payload.ActiveRepo)
+	}
+	if workingDir, ok := payload.Variables["working_dir"].(string); !ok || workingDir == "" {
+		t.Fatal("expected working_dir to be set for terminal shell execution")
 	}
 }
 

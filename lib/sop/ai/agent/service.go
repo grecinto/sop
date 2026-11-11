@@ -143,6 +143,18 @@ func (s *Service) RegisteredAgent(id string) ai.Agent[map[string]any] {
 	return s.registry[id]
 }
 
+// RegisteredAgents returns a copy of all registered agents when the service owns them.
+func (s *Service) RegisteredAgents() map[string]ai.Agent[map[string]any] {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	agents := make(map[string]ai.Agent[map[string]any], len(s.registry))
+	for k, v := range s.registry {
+		agents[k] = v
+	}
+	return agents
+}
+
 // SetFeature allows toggling of agent features at runtime.
 func (s *Service) SetFeature(feature string, enabled bool) {
 	switch feature {
@@ -2409,14 +2421,16 @@ func (s *Service) AskWithRequest(ctx context.Context, req AskRequest) (AskRespon
 	}()
 
 	if s != nil && s.registry != nil {
-		if copilotAgent, ok := s.registry["copilot"]; ok && copilotAgent != nil {
-			finalText, err := copilotAgent.Ask(runCtx, req.Query, cfg)
-			resp := AskResponse{
-				FinalText:      finalText,
-				UpdatedSession: req.Session,
+		for _, name := range []string{"copilot", "sql_core"} {
+			if copilotAgent, ok := s.registry[name]; ok && copilotAgent != nil {
+				finalText, err := copilotAgent.Ask(runCtx, req.Query, cfg)
+				resp := AskResponse{
+					FinalText:      finalText,
+					UpdatedSession: req.Session,
+				}
+				s.syncSessionFromPayload(resp.UpdatedSession)
+				return resp, err
 			}
-			s.syncSessionFromPayload(resp.UpdatedSession)
-			return resp, err
 		}
 	}
 
